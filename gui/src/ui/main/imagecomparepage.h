@@ -2,9 +2,11 @@
 #define IMAGECOMPAREPAGE_H
 
 #include <QImage>
+#include <QObject>
 #include <QString>
 #include <QWidget>
 
+class QEvent;
 class QDoubleSpinBox;
 class QLabel;
 class QPushButton;
@@ -21,6 +23,7 @@ signals:
     void backRequested();
 
 protected:
+    bool eventFilter(QObject* watched, QEvent* event) override;
     void resizeEvent(QResizeEvent* event) override;
 
 private slots:

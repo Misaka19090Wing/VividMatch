@@ -7,6 +7,9 @@ The GUI exposes a function-selection home page. Selecting image-compare mode
 opens a page where the user chooses two image files and runs the OpenCV DCT
 fingerprint comparison from `../cpp/visual_fingerprint.hpp`.
 
+Images can be selected with the buttons or dragged from the file manager and
+dropped onto the matching preview panel.
+
 Build:
 
 ```bat

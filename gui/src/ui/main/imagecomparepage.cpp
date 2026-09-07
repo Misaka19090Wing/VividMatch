@@ -5,15 +5,22 @@
 #include "visual_fingerprint.hpp"
 
 #include <QDoubleSpinBox>
+#include <QDragEnterEvent>
+#include <QDropEvent>
+#include <QEvent>
 #include <QFile>
 #include <QFileDialog>
+#include <QFileInfo>
 #include <QFrame>
 #include <QHBoxLayout>
 #include <QImage>
 #include <QLabel>
 #include <QMessageBox>
+#include <QMimeData>
 #include <QPushButton>
 #include <QResizeEvent>
+#include <QStringList>
+#include <QUrl>
 #include <QVBoxLayout>
 #include <QWidget>
 
@@ -45,6 +52,31 @@ bool decodeImage(const QString& path, cv::Mat& output)
 QString elidedPath(const QLabel* label, const QString& path)
 {
     return label->fontMetrics().elidedText(path, Qt::ElideMiddle, 360);
+}
+
+bool isSupportedImageFile(const QString& path)
+{
+    const QString suffix = QFileInfo(path).suffix().toLower();
+    static const QStringList supported = {
+        QStringLiteral("png"),  QStringLiteral("jpg"), QStringLiteral("jpeg"),
+        QStringLiteral("bmp"),  QStringLiteral("webp"),
+    };
+    return supported.contains(suffix);
+}
+
+QString firstDroppedImage(const QDropEvent* event)
+{
+    const QMimeData* mime = event->mimeData();
+    if (!mime || !mime->hasUrls()) {
+        return QString();
+    }
+    const QList<QUrl> urls = mime->urls();
+    for (const QUrl& url : urls) {
+        if (url.isLocalFile() && isSupportedImageFile(url.toLocalFile())) {
+            return url.toLocalFile();
+        }
+    }
+    return QString();
 }
 
 } // namespace
@@ -91,6 +123,12 @@ ImageComparePage::ImageComparePage(QWidget* parent)
     m_secondPreview = makePreview();
     m_firstPreview->setText(tr("未选择图片一"));
     m_secondPreview->setText(tr("未选择图片二"));
+    m_firstPreview->setAcceptDrops(true);
+    m_secondPreview->setAcceptDrops(true);
+    m_firstPreview->installEventFilter(this);
+    m_secondPreview->installEventFilter(this);
+    setAcceptDrops(true);
+    installEventFilter(this);
 
     auto makePathLabel = [this]() -> QLabel* {
         QLabel* label = new QLabel(this);
@@ -295,6 +333,41 @@ void ImageComparePage::setResult(double score, double threshold, int firstWidth,
 void ImageComparePage::showError(const QString& message)
 {
     QMessageBox::warning(this, tr("比对失败"), message);
+}
+
+bool ImageComparePage::eventFilter(QObject* watched, QEvent* event)
+{
+    const bool overFirst = watched == m_firstPreview;
+    const bool overSecond = watched == m_secondPreview;
+    const bool overPage = watched == this;
+
+    if (!overFirst && !overSecond && !overPage) {
+        return QWidget::eventFilter(watched, event);
+    }
+
+    if (event->type() == QEvent::DragEnter || event->type() == QEvent::DragMove) {
+        auto* dragEvent = static_cast<QDragEnterEvent*>(event);
+        if (!firstDroppedImage(dragEvent).isEmpty()) {
+            dragEvent->acceptProposedAction();
+            return true;
+        }
+    } else if (event->type() == QEvent::Drop) {
+        auto* dropEvent = static_cast<QDropEvent*>(event);
+        const QString path = firstDroppedImage(dropEvent);
+        if (!path.isEmpty()) {
+            int slot = 0;
+            if (overSecond) {
+                slot = 1;
+            } else if (overPage) {
+                const QPoint position = dropEvent->position().toPoint();
+                slot = position.x() < width() / 2 ? 0 : 1;
+            }
+            setImagePath(slot, path);
+            dropEvent->acceptProposedAction();
+            return true;
+        }
+    }
+    return QWidget::eventFilter(watched, event);
 }
 
 void ImageComparePage::resizeEvent(QResizeEvent* event)
