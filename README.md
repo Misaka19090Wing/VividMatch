@@ -27,6 +27,19 @@ cpp\vividmatch_image_test.exe
 `build_msvc.bat` accepts the OpenCV root as its first argument. The default
 threshold is `0.78`.
 
+## Qt GUI (VividMatchGui)
+
+A Qt 6 GUI based on the `XMuli/myapp-template` template lets the user choose
+the image-compare mode from a function-selection page, pick two images, and
+see the similarity result.
+
+```bat
+gui\build_gui.bat
+gui\run_gui.bat
+```
+
+See `gui/README.md` for Qt/OpenCV paths and VS Code Qt extension setup.
+
 ## Python reference implementation
 
 An equivalent Python/OpenCV implementation is also kept for experiments:

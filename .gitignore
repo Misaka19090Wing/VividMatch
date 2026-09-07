@@ -10,3 +10,7 @@ cpp/*.obj
 cpp/vividmatch_image.exe
 cpp/vividmatch_image_test.exe
 cpp/.build/
+gui/build/
+gui/bin/
+guibuild/
+aqtinstall.log
