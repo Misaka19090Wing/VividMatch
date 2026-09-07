@@ -11,8 +11,8 @@ set(CMAKE_RUNTIME_OUTPUT_DIRECTORY "${CMAKE_SOURCE_DIR}/bin")
 find_package(QT NAMES Qt6 Qt5 REQUIRED COMPONENTS Widgets)
 find_package(Qt${QT_VERSION_MAJOR} REQUIRED COMPONENTS Widgets)
 
-if(NOT DEFINED OpenCV_DIR)
-    set(OpenCV_DIR "C:/Users/EternalWing/opencv/build" CACHE PATH "OpenCV build root")
+if(DEFINED ENV{OpenCV_DIR} AND NOT DEFINED OpenCV_DIR)
+    set(OpenCV_DIR "$ENV{OpenCV_DIR}")
 endif()
 find_package(OpenCV REQUIRED)
 

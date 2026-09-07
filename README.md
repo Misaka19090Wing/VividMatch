@@ -40,6 +40,16 @@ gui\run_gui.bat
 
 See `gui/README.md` for Qt/OpenCV paths and VS Code Qt extension setup.
 
+To give the GUI to computers that do not have Qt/OpenCV installed, package a
+portable copy once on a development machine:
+
+```bat
+gui\package_gui.bat
+```
+
+The portable app is written to `dist\VividMatchGui\` and can be run there
+without installing Qt or OpenCV.
+
 ## Python reference implementation
 
 An equivalent Python/OpenCV implementation is also kept for experiments:

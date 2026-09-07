@@ -22,10 +22,36 @@ Run:
 gui\run_gui.bat
 ```
 
-Expected paths used by the scripts:
+## Portable package
 
-- Qt: `C:\Users\EternalWing\Qt\6.8.3\msvc2022_64`
-- OpenCV: `C:\Users\EternalWing\opencv`
+Run once on a build machine that has Qt and OpenCV installed:
+
+```bat
+gui\package_gui.bat
+```
+
+The result is written to `dist\VividMatchGui\`. Qt DLLs/plugins and the OpenCV
+runtime DLL are copied next to the executable, so the whole folder can be
+copied to another Windows x64 computer that has neither Qt nor OpenCV
+installed. Launch it with `VividMatchGui.exe` directly or from this repository
+with `gui\run_gui.bat`.
+
+## Paths on different machines
+
+The scripts never assume one user profile. When `QT_ROOT`, `OPENCV_ROOT` or
+`OPENCV_BIN` are set as environment variables, those values are used first.
+Otherwise the scripts look at common install locations such as `C:\Qt`,
+`D:\Qt`, `%USERPROFILE%\Qt`, `C:\opencv`, `D:\opencv` and
+`%USERPROFILE%\opencv`.
+
+`CMAKE_GENERATOR` and `CMAKE_GENERATOR_ARGS` can be overridden for toolchains
+other than Visual Studio 2022 x64.
+
+If CMake is not on `PATH`, the scripts fall back to `python -m cmake`.
+
+In Visual Studio Code, register the installed Qt root with
+`Qt: Register Qt installation`, then configure `gui/CMakeLists.txt` with CMake
+Tools.
 
 In Visual Studio Code, run `Qt: Register Qt installation` and point it at the
 Qt directory above, then use CMake Tools to configure `gui/CMakeLists.txt`.
