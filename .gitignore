@@ -1,0 +1,12 @@
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+venv/
+build/
+dist/
+.demo_images/
+cpp/*.obj
+cpp/vividmatch_image.exe
+cpp/vividmatch_image_test.exe
+cpp/.build/
