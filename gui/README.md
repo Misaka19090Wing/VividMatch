@@ -27,6 +27,17 @@ Batch list controls:
   focuses the locate/search field.
 - Double-click opens an image; the right-click menu provides copy path,
   properties, open containing folder, remove, delete and compare actions.
+- Right-click a group row for the group menu: expand/collapse (this group or
+  all), check/uncheck/invert the whole group, keep only the policy-best image,
+  open every image in the group, open its folder, remove the group, remove or
+  delete just the checked images, and start the comparison.
+- Drag a column edge to resize it. The checkbox indicator stays left-aligned at
+  the start of the 选中 cell, so it never drifts into the middle of a widened
+  column; the column can shrink until the checkbox just fits and stops there,
+  and the group/child tree indent is kept small so almost no space is wasted to
+  its left. Widening 缩略图 scales the thumbnails up (each keeps its own aspect
+  ratio) while that row's height grows with them, so no thumbnail is clipped.
+  Group header rows keep their own height and never grow with the thumbnails.
 
 Build:
 

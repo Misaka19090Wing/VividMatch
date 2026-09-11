@@ -24,10 +24,15 @@
 #include <QMenu>
 #include <QMessageBox>
 #include <QMimeData>
+#include <QPainter>
 #include <QProgressBar>
 #include <QPushButton>
 #include <QShortcut>
+#include <QStyle>
+#include <QStyledItemDelegate>
+#include <QStyleOptionViewItem>
 #include <QThread>
+#include <QTimer>
 #include <QTreeWidget>
 #include <QTreeWidgetItem>
 #include <QUrl>
@@ -39,6 +44,19 @@ namespace {
 
 constexpr int kRecordIdRole = Qt::UserRole + 1;
 constexpr int kGroupBaseRole = Qt::UserRole + 2;
+constexpr int kThumbnailImageRole = Qt::UserRole + 3;
+
+// Padding kept between the thumbnail column edges and the thumbnail itself.
+constexpr int kThumbnailPadding = 8;
+// Tree indent for the group/child hierarchy. Kept small because the rows are
+// already grouped visually; the wide default would leave a large empty gap
+// between the 选中 column edge and the checkbox.
+constexpr int kTreeIndentation = 6;
+// Fallback minimum before any row exists to measure the real cell start. Once
+// rows are loaded the exact value is recomputed from the tree layout.
+constexpr int kFallbackMinColumnWidth = 24;
+// The thumbnail column stays readable even when dragged narrow.
+constexpr int kMinThumbnailColumnWidth = 72;
 
 QStringList imageWildcards()
 {
@@ -88,6 +106,155 @@ QString fileTypeName(const QString& suffix)
 
 } // namespace
 
+// Rect the checkbox indicator occupies inside the check column. The indicator
+// is left-aligned right after the cell start (the tree indent and the
+// expand/collapse branch already sit to its left), which keeps it hugging the
+// 选中 header instead of drifting to the middle when the column is widened.
+static QRect checkBoxRect(const QStyleOptionViewItem& option)
+{
+    QStyleOptionButton indicator;
+    indicator.state = QStyle::State_Enabled;
+    indicator.rect = option.rect;
+    indicator.direction = option.direction;
+    indicator.fontMetrics = option.fontMetrics;
+    const QRect indicatorRect =
+        option.widget->style()->subElementRect(QStyle::SE_ItemViewItemCheckIndicator,
+                                               &indicator, option.widget);
+    const QSize size = indicatorRect.size();
+    const int maxX = option.rect.right() - size.width() + 1;
+    const int x = std::min(option.rect.x(), maxX);
+    return QRect(x, option.rect.y() + (option.rect.height() - size.height()) / 2,
+                 size.width(), size.height());
+}
+
+// Keeps the checkbox centred in the check column and the thumbnail fitted to
+// the current thumbnail column width, so resizing a column really moves or
+// scales what that column draws.
+class BatchComparePage::BatchItemDelegate : public QStyledItemDelegate
+{
+public:
+    explicit BatchItemDelegate(QObject* parent = nullptr)
+        : QStyledItemDelegate(parent)
+    {
+    }
+
+    void setThumbnailColumnWidth(int width) { m_thumbnailColumnWidth = std::max(1, width); }
+
+    QSize sizeHint(const QStyleOptionViewItem& option,
+                   const QModelIndex& index) const override
+    {
+        // Group rows span the whole row, so their height must not follow the
+        // thumbnail column width. Only real records carry a record id.
+        const bool isRecord =
+            index.sibling(index.row(), CheckColumn).data(kRecordIdRole).toInt() > 0;
+        if (isRecord && index.column() == ThumbnailColumn) {
+            return QSize(m_thumbnailColumnWidth,
+                         thumbnailHeight(index, m_thumbnailColumnWidth)
+                             + 2 * kThumbnailPadding);
+        }
+        return QStyledItemDelegate::sizeHint(option, index);
+    }
+
+    void paint(QPainter* painter, const QStyleOptionViewItem& option,
+               const QModelIndex& index) const override
+    {
+        if (index.column() == CheckColumn) {
+            paintCheckColumn(painter, option, index);
+            return;
+        }
+        if (index.column() == ThumbnailColumn) {
+            paintThumbnailColumn(painter, option, index);
+            return;
+        }
+        QStyledItemDelegate::paint(painter, option, index);
+    }
+
+    // Height the thumbnail occupies when its column is columnWidth wide.
+    static int thumbnailHeight(const QModelIndex& index, int columnWidth)
+    {
+        const int available = std::max(1, columnWidth - 2 * kThumbnailPadding);
+        const QImage image = index.data(kThumbnailImageRole).value<QImage>();
+        if (image.isNull() || image.width() <= 0 || image.height() <= 0) {
+            return available / 2;
+        }
+        return std::max(1, image.height() * available / image.width());
+    }
+
+private:
+    void paintCheckColumn(QPainter* painter, const QStyleOptionViewItem& option,
+                          const QModelIndex& index) const
+    {
+        if (!(index.flags() & Qt::ItemIsUserCheckable)) {
+            QStyledItemDelegate::paint(painter, option, index);
+            return;
+        }
+
+        QStyleOptionViewItem adjusted(option);
+        initStyleOption(&adjusted, index);
+        adjusted.features &= ~QStyleOptionViewItem::HasCheckIndicator;
+        adjusted.text.clear();
+        adjusted.icon = QIcon();
+
+        QStyle* style = option.widget->style();
+        style->drawPrimitive(QStyle::PE_PanelItemViewItem, &adjusted,
+                             painter, option.widget);
+
+        QStyleOptionButton indicator;
+        indicator.state = QStyle::State_Enabled;
+        if (option.state & QStyle::State_MouseOver) {
+            indicator.state |= QStyle::State_MouseOver;
+        }
+        indicator.rect = checkBoxRect(option);
+        indicator.direction = option.direction;
+        indicator.fontMetrics = option.fontMetrics;
+        switch (index.data(Qt::CheckStateRole).toInt()) {
+            case Qt::Checked:
+                indicator.state |= QStyle::State_On;
+                break;
+            case Qt::PartiallyChecked:
+                indicator.state |= QStyle::State_NoChange;
+                break;
+            default:
+                indicator.state |= QStyle::State_Off;
+                break;
+        }
+        style->drawPrimitive(QStyle::PE_IndicatorItemViewItemCheck, &indicator,
+                             painter, option.widget);
+    }
+
+    void paintThumbnailColumn(QPainter* painter,
+                              const QStyleOptionViewItem& option,
+                              const QModelIndex& index) const
+    {
+        QStyleOptionViewItem adjusted(option);
+        initStyleOption(&adjusted, index);
+        adjusted.text.clear();
+        adjusted.icon = QIcon();
+
+        QStyle* style = option.widget->style();
+        style->drawPrimitive(QStyle::PE_PanelItemViewItem, &adjusted,
+                             painter, option.widget);
+
+        const QImage image = index.data(kThumbnailImageRole).value<QImage>();
+        if (image.isNull()) {
+            return;
+        }
+        const QRect target = option.rect.adjusted(kThumbnailPadding, 0,
+                                                  -kThumbnailPadding, 0);
+        if (target.width() <= 0) {
+            return;
+        }
+        const QSize scaled =
+            image.size().scaled(target.size(), Qt::KeepAspectRatio);
+        const QRect box(target.x() + (target.width() - scaled.width()) / 2,
+                        target.y() + (target.height() - scaled.height()) / 2,
+                        scaled.width(), scaled.height());
+        painter->drawImage(box, image);
+    }
+
+    int m_thumbnailColumnWidth = 82;
+};
+
 BatchComparePage::BatchComparePage(QWidget* parent)
     : QWidget(parent)
     , m_tree(new QTreeWidget(this))
@@ -99,12 +266,21 @@ BatchComparePage::BatchComparePage(QWidget* parent)
     , m_deleteButton(nullptr)
     , m_compareButton(nullptr)
     , m_status(new QLabel(this))
+    , m_delegate(new BatchComparePage::BatchItemDelegate(this))
+    , m_thumbnailRefresh(new QTimer(this))
+    , m_thumbnailColumnWidth(82)
     , m_worker(nullptr)
     , m_nextRecordId(1)
     , m_hasCompared(false)
     , m_comparing(false)
 {
     qRegisterMetaType<QVector<BatchCluster>>("QVector<BatchCluster>");
+
+    // Column dragging emits sectionResized continuously, so the thumbnail
+    // rescale and the row-height relayout run once the drag settles.
+    m_thumbnailRefresh->setSingleShot(true);
+    m_thumbnailRefresh->setInterval(40);
+    connect(m_thumbnailRefresh, &QTimer::timeout, this, &BatchComparePage::updateThumbnails);
 
     setAcceptDrops(true);
     m_baseHeaders = {
@@ -156,6 +332,8 @@ BatchComparePage::BatchComparePage(QWidget* parent)
     controls->addWidget(m_removeButton);
     controls->addWidget(m_deleteButton);
     controls->addStretch(1);
+    controls->addWidget(m_compareButton);
+    controls->addSpacing(12);
     controls->addWidget(new QLabel(tr("勾选策略"), this));
     m_policy->addItem(tr("分辨率最高"), static_cast<int>(SelectionPolicy::HighestResolution));
     m_policy->addItem(tr("分辨率最低"), static_cast<int>(SelectionPolicy::LowestResolution));
@@ -190,14 +368,14 @@ BatchComparePage::BatchComparePage(QWidget* parent)
     m_tree->setRootIsDecorated(true);
     m_tree->setItemsExpandable(true);
     m_tree->setExpandsOnDoubleClick(true);
-    m_tree->setIndentation(18);
+    m_tree->setIndentation(kTreeIndentation);
     m_tree->setAlternatingRowColors(true);
     m_tree->setSelectionMode(QAbstractItemView::ExtendedSelection);
     m_tree->setSelectionBehavior(QAbstractItemView::SelectRows);
     m_tree->setEditTriggers(QAbstractItemView::NoEditTriggers);
     m_tree->setContextMenuPolicy(Qt::CustomContextMenu);
-    m_tree->setIconSize(QSize(72, 54));
     m_tree->setUniformRowHeights(false);
+    m_tree->setItemDelegate(m_delegate);
     m_tree->header()->setSectionsClickable(true);
     m_tree->header()->setSectionsMovable(true);
     m_tree->header()->setSortIndicatorShown(false);
@@ -207,8 +385,9 @@ BatchComparePage::BatchComparePage(QWidget* parent)
         "Ctrl+单击：添加次级排序\n"
         "右键表头：显示或隐藏列，也可拖动表头调整顺序"));
     m_tree->header()->setStretchLastSection(false);
+    m_tree->header()->setMinimumSectionSize(kFallbackMinColumnWidth);
     m_tree->header()->resizeSection(CheckColumn, 42);
-    m_tree->header()->resizeSection(ThumbnailColumn, 82);
+    m_tree->header()->resizeSection(ThumbnailColumn, m_thumbnailColumnWidth);
     m_tree->header()->resizeSection(NameColumn, 190);
     m_tree->header()->resizeSection(ResolutionColumn, 92);
     m_tree->header()->resizeSection(TypeColumn, 68);
@@ -216,6 +395,7 @@ BatchComparePage::BatchComparePage(QWidget* parent)
     m_tree->header()->resizeSection(ModifiedColumn, 142);
     m_tree->header()->resizeSection(PathColumn, 310);
     m_tree->header()->resizeSection(DepthColumn, 72);
+    m_delegate->setThumbnailColumnWidth(m_thumbnailColumnWidth);
 
     connect(m_tree, &QTreeWidget::customContextMenuRequested,
             this, &BatchComparePage::showTreeContextMenu);
@@ -223,6 +403,8 @@ BatchComparePage::BatchComparePage(QWidget* parent)
             this, &BatchComparePage::showHeaderContextMenu);
     connect(m_tree->header(), &QHeaderView::sectionClicked,
             this, &BatchComparePage::handleHeaderClicked);
+    connect(m_tree->header(), &QHeaderView::sectionResized,
+            this, &BatchComparePage::onSectionResized);
     connect(m_tree, &QTreeWidget::itemChanged, this, [this](QTreeWidgetItem*, int) {
         updateStatus();
     });
@@ -247,6 +429,7 @@ BatchComparePage::BatchComparePage(QWidget* parent)
     });
 
     updateStatus();
+    updateMinimumColumnWidth();
 }
 
 void BatchComparePage::chooseFolder()
@@ -390,6 +573,76 @@ void BatchComparePage::onCompareThreadFinished()
     updateStatus();
 }
 
+void BatchComparePage::onSectionResized(int column, int oldSize, int newSize)
+{
+    Q_UNUSED(oldSize);
+    if (column != ThumbnailColumn) {
+        return;
+    }
+
+    // Keep the thumbnail column wide enough to be readable; every other column
+    // may shrink down to the header's minimum section size.
+    if (newSize < kMinThumbnailColumnWidth) {
+        m_tree->header()->resizeSection(column, kMinThumbnailColumnWidth);
+        return;
+    }
+    if (newSize == m_thumbnailColumnWidth) {
+        return;
+    }
+
+    m_thumbnailColumnWidth = newSize;
+    m_delegate->setThumbnailColumnWidth(newSize);
+
+    // Re-querying the size hints updates every row height, and the repaint
+    // redraws the thumbnails at the new width. Both are coalesced so that a
+    // continuous column drag does not rescale the images on every pixel.
+    m_thumbnailRefresh->start();
+}
+
+void BatchComparePage::updateThumbnails()
+{
+    if (m_records.isEmpty()) {
+        return;
+    }
+    m_tree->doItemsLayout();
+    m_tree->viewport()->update();
+    updateMinimumColumnWidth();
+}
+
+// The left-aligned checkbox sits at the start of the first column's cell. That
+// cell begins after the tree's own offset, which is two indentation steps (the
+// item level plus the expand/collapse branch) — matching what the view reports
+// for a laid-out row. The first column therefore only has to reach past that
+// offset by the checkbox width plus a small margin.
+void BatchComparePage::updateMinimumColumnWidth()
+{
+    QStyleOptionButton indicator;
+    indicator.state = QStyle::State_Enabled;
+    indicator.rect = QRect(0, 0, 100, 100);
+    const int boxWidth =
+        std::max(1, m_tree->style()
+                         ->subElementRect(QStyle::SE_ItemViewItemCheckIndicator,
+                                          &indicator, m_tree)
+                         .width());
+
+    const int offset = m_tree->indentation() * 2;
+    const int needed = offset + boxWidth + 2;
+    if (needed != m_tree->header()->minimumSectionSize()) {
+        m_tree->header()->setMinimumSectionSize(needed);
+    }
+    enforceCheckColumnMinimum();
+}
+
+// Shrinking must never clip the checkbox; a resize that lands below the minimum
+// is pushed back up.
+void BatchComparePage::enforceCheckColumnMinimum()
+{
+    QHeaderView* header = m_tree->header();
+    if (header->sectionSize(CheckColumn) < header->minimumSectionSize()) {
+        header->resizeSection(CheckColumn, header->minimumSectionSize());
+    }
+}
+
 void BatchComparePage::addImagePaths(const QStringList& paths)
 {
     int added = 0;
@@ -407,6 +660,9 @@ void BatchComparePage::addImagePaths(const QStringList& paths)
         m_progress->setFormat(tr("已加入 %1 张，等待比对").arg(added));
         applySort();
         refreshGroupLabels();
+        // The new rows have no geometry yet, so the minimum is measured once
+        // the tree has laid them out.
+        QTimer::singleShot(0, this, &BatchComparePage::updateMinimumColumnWidth);
     }
     updateStatus();
 }
@@ -446,8 +702,7 @@ bool BatchComparePage::addImagePath(const QString& path, int& recordId)
     row.width = image.width();
     row.height = image.height();
     row.depth = image.depth();
-    row.thumbnail = QPixmap::fromImage(
-        image.scaled(72, 54, Qt::KeepAspectRatio, Qt::SmoothTransformation));
+    row.thumbnail = image;
 
     recordId = row.id;
     m_records.insert(recordId, row);
@@ -467,7 +722,7 @@ QTreeWidgetItem* BatchComparePage::createChildItem(int recordId, bool checked)
     item->setFlags(Qt::ItemIsEnabled | Qt::ItemIsSelectable | Qt::ItemIsUserCheckable);
     item->setCheckState(CheckColumn, checked ? Qt::Checked : Qt::Unchecked);
     if (!row.thumbnail.isNull()) {
-        item->setIcon(ThumbnailColumn, QIcon(row.thumbnail));
+        item->setData(ThumbnailColumn, kThumbnailImageRole, row.thumbnail);
     }
     item->setText(NameColumn, row.name);
     item->setText(ResolutionColumn, row.resolution);
@@ -476,7 +731,6 @@ QTreeWidgetItem* BatchComparePage::createChildItem(int recordId, bool checked)
     item->setText(ModifiedColumn, row.modifiedText);
     item->setText(PathColumn, row.path);
     item->setText(DepthColumn, row.bitDepth);
-    item->setSizeHint(ThumbnailColumn, QSize(72, 58));
     item->setTextAlignment(SizeColumn, Qt::AlignRight | Qt::AlignVCenter);
     item->setTextAlignment(DepthColumn, Qt::AlignRight | Qt::AlignVCenter);
     item->setToolTip(PathColumn, row.path);
@@ -585,6 +839,27 @@ QVector<QTreeWidgetItem*> BatchComparePage::allChildItems() const
         for (int j = 0; j < group->childCount(); ++j) {
             items.append(group->child(j));
         }
+    }
+    return items;
+}
+
+bool BatchComparePage::isGroupItem(const QTreeWidgetItem* item) const
+{
+    return item && item->parent() == nullptr && item->data(CheckColumn, kRecordIdRole).toInt() <= 0;
+}
+
+QVector<QTreeWidgetItem*> BatchComparePage::groupChildren(
+    const QTreeWidgetItem* group) const
+{
+    QVector<QTreeWidgetItem*> items;
+    if (!isGroupItem(group) || !group->childCount()) {
+        return items;
+    }
+    // QTreeWidgetItem::child() is non-const; the items themselves are only read
+    // by the callers that use this vector for checking state.
+    QTreeWidgetItem* mutableGroup = const_cast<QTreeWidgetItem*>(group);
+    for (int i = 0; i < mutableGroup->childCount(); ++i) {
+        items.append(mutableGroup->child(i));
     }
     return items;
 }
@@ -773,6 +1048,10 @@ bool BatchComparePage::matchesSearch(const RowData& row, const QString& text) co
 void BatchComparePage::showTreeContextMenu(const QPoint& position)
 {
     QTreeWidgetItem* clicked = m_tree->itemAt(position);
+    if (isGroupItem(clicked)) {
+        showGroupContextMenu(clicked, position);
+        return;
+    }
     if (clicked && recordForItem(clicked) && !clicked->isSelected()) {
         m_tree->clearSelection();
         clicked->setSelected(true);
@@ -819,6 +1098,155 @@ void BatchComparePage::showTreeContextMenu(const QPoint& position)
     } else if (chosen == compareAction) {
         startCompare();
     }
+}
+
+void BatchComparePage::buildGroupMenu(QMenu& menu, const QTreeWidgetItem* group) const
+{
+    auto add = [&menu](GroupAction id, const QString& text) {
+        QAction* action = menu.addAction(text);
+        action->setData(static_cast<int>(id));
+        return action;
+    };
+
+    add(GroupAction::ToggleExpand,
+        group->isExpanded() ? tr("折叠分组") : tr("展开分组"));
+    add(GroupAction::ExpandAll, tr("全部展开"));
+    add(GroupAction::CollapseAll, tr("全部折叠"));
+    menu.addSeparator();
+    add(GroupAction::CheckAll, tr("全选分组内图片"));
+    add(GroupAction::UncheckAll, tr("取消全选分组内图片"));
+    add(GroupAction::InvertChecked, tr("反选分组内图片"));
+    add(GroupAction::KeepOnlyBest, tr("仅保留策略最优图片"));
+    menu.addSeparator();
+    add(GroupAction::OpenAll, tr("打开分组内全部图片"));
+    add(GroupAction::OpenFolder, tr("打开文件所在文件夹"));
+    menu.addSeparator();
+    add(GroupAction::RemoveGroup, tr("移出该分组"));
+    add(GroupAction::RemoveChecked, tr("移出分组内勾选项"));
+    add(GroupAction::DeleteChecked, tr("删除分组内勾选文件"));
+    menu.addSeparator();
+    add(GroupAction::Compare, tr("开始比对勾选图片"));
+
+    // A group with no pictures left has nothing to act on, and "keep only the
+    // best" is meaningless while the policy is "keep everything".
+    const bool hasMembers = groupChildren(group).size() > 0;
+    for (QAction* action : menu.actions()) {
+        if (!action->isSeparator() && action->data().isValid()) {
+            action->setEnabled(hasMembers);
+        }
+    }
+    for (QAction* action : menu.actions()) {
+        if (action->data().toInt() == static_cast<int>(GroupAction::KeepOnlyBest)) {
+            action->setEnabled(hasMembers && currentPolicy() != SelectionPolicy::KeepAll);
+        }
+    }
+}
+
+void BatchComparePage::applyGroupAction(QTreeWidgetItem* group, int actionId)
+{
+    if (!isGroupItem(group)) {
+        return;
+    }
+    const QVector<QTreeWidgetItem*> members = groupChildren(group);
+    const GroupAction action = static_cast<GroupAction>(actionId);
+
+    auto checkedMembers = [&members]() {
+        QVector<QTreeWidgetItem*> checked;
+        for (QTreeWidgetItem* item : members) {
+            if (item->checkState(CheckColumn) == Qt::Checked) {
+                checked.append(item);
+            }
+        }
+        return checked;
+    };
+
+    switch (action) {
+        case GroupAction::ToggleExpand:
+            group->setExpanded(!group->isExpanded());
+            break;
+        case GroupAction::ExpandAll:
+            setAllGroupsExpanded(true);
+            break;
+        case GroupAction::CollapseAll:
+            setAllGroupsExpanded(false);
+            break;
+        case GroupAction::CheckAll:
+            setItemsChecked(members, true);
+            break;
+        case GroupAction::UncheckAll:
+            setItemsChecked(members, false);
+            break;
+        case GroupAction::InvertChecked:
+            for (QTreeWidgetItem* item : members) {
+                item->setCheckState(CheckColumn,
+                                    item->checkState(CheckColumn) == Qt::Checked
+                                        ? Qt::Unchecked
+                                        : Qt::Checked);
+            }
+            updateStatus();
+            break;
+        case GroupAction::KeepOnlyBest:
+            keepOnlyBest(group);
+            break;
+        case GroupAction::OpenAll:
+            for (QTreeWidgetItem* item : members) {
+                const RowData* row = recordForItem(item);
+                if (row) {
+                    QDesktopServices::openUrl(QUrl::fromLocalFile(row->path));
+                }
+            }
+            break;
+        case GroupAction::OpenFolder:
+            openContainingFolder(members);
+            break;
+        case GroupAction::RemoveGroup:
+            removeItems(members);
+            break;
+        case GroupAction::RemoveChecked:
+            removeItems(checkedMembers());
+            break;
+        case GroupAction::DeleteChecked:
+            deleteFiles(checkedMembers());
+            break;
+        case GroupAction::Compare:
+            startCompare();
+            break;
+    }
+}
+
+void BatchComparePage::showGroupContextMenu(QTreeWidgetItem* group, const QPoint& position)
+{
+    QMenu menu(this);
+    buildGroupMenu(menu, group);
+    QAction* chosen = menu.exec(m_tree->viewport()->mapToGlobal(position));
+    if (chosen && chosen->data().isValid()) {
+        applyGroupAction(group, chosen->data().toInt());
+    }
+}
+
+void BatchComparePage::setAllGroupsExpanded(bool expanded)
+{
+    for (int i = 0; i < m_tree->topLevelItemCount(); ++i) {
+        m_tree->topLevelItem(i)->setExpanded(expanded);
+    }
+}
+
+void BatchComparePage::keepOnlyBest(QTreeWidgetItem* group)
+{
+    QVector<QTreeWidgetItem*> members = groupChildren(group);
+    if (members.isEmpty()) {
+        return;
+    }
+    QVector<int> ids;
+    for (QTreeWidgetItem* item : members) {
+        ids.append(item->data(CheckColumn, kRecordIdRole).toInt());
+    }
+    const int winner = chooseWinnerId(ids);
+    for (QTreeWidgetItem* item : members) {
+        const int id = item->data(CheckColumn, kRecordIdRole).toInt();
+        item->setCheckState(CheckColumn, id == winner ? Qt::Checked : Qt::Unchecked);
+    }
+    updateStatus();
 }
 
 void BatchComparePage::showHeaderContextMenu(const QPoint& position)

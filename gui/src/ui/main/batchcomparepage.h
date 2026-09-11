@@ -3,6 +3,7 @@
 
 #include <QDateTime>
 #include <QHash>
+#include <QImage>
 #include <QPixmap>
 #include <QPointer>
 #include <QString>
@@ -16,9 +17,11 @@ class QComboBox;
 class QKeyEvent;
 class QLabel;
 class QLineEdit;
+class QMenu;
 class QProgressBar;
 class QPushButton;
 class QThread;
+class QTimer;
 class QTreeWidget;
 class QTreeWidgetItem;
 
@@ -37,6 +40,20 @@ protected:
     void dragEnterEvent(QDragEnterEvent* event) override;
     void dropEvent(QDropEvent* event) override;
 
+public:
+    enum Column {
+        CheckColumn = 0,
+        ThumbnailColumn,
+        NameColumn,
+        ResolutionColumn,
+        TypeColumn,
+        SizeColumn,
+        ModifiedColumn,
+        PathColumn,
+        DepthColumn,
+        ColumnCount,
+    };
+
 private:
     enum class SelectionPolicy {
         HighestResolution = 0,
@@ -50,18 +67,28 @@ private:
         KeepAll,
     };
 
-    enum Column {
-        CheckColumn = 0,
-        ThumbnailColumn,
-        NameColumn,
-        ResolutionColumn,
-        TypeColumn,
-        SizeColumn,
-        ModifiedColumn,
-        PathColumn,
-        DepthColumn,
-        ColumnCount,
+    class BatchItemDelegate;
+
+    // Entries of the group (top-level row) context menu.
+    enum class GroupAction {
+        ToggleExpand = 0,
+        ExpandAll,
+        CollapseAll,
+        CheckAll,
+        UncheckAll,
+        InvertChecked,
+        KeepOnlyBest,
+        OpenAll,
+        OpenFolder,
+        RemoveGroup,
+        RemoveChecked,
+        DeleteChecked,
+        Compare,
     };
+
+    // Test-only hook: lets the automated harness load rows and drive column
+    // resizes without going through the file dialogs.
+    friend class BatchComparePageTestHook;
 
     struct SortRule {
         int column = NameColumn;
@@ -82,7 +109,7 @@ private:
         int height = 0;
         int depth = 0;
         QDateTime modified;
-        QPixmap thumbnail;
+        QImage thumbnail;
     };
 
 private slots:
@@ -96,7 +123,9 @@ private slots:
     void compareFailed(const QString& message);
     void onProgressChanged(int done, int total);
     void onCompareThreadFinished();
+    void onSectionResized(int column, int oldSize, int newSize);
     void showTreeContextMenu(const QPoint& position);
+    void showGroupContextMenu(QTreeWidgetItem* group, const QPoint& position);
     void showHeaderContextMenu(const QPoint& position);
     void handleHeaderClicked(int column);
     void openSelected();
@@ -106,6 +135,9 @@ private slots:
 private:
     void addImagePaths(const QStringList& paths);
     bool addImagePath(const QString& path, int& recordId);
+    void updateThumbnails();
+    void updateMinimumColumnWidth();
+    void enforceCheckColumnMinimum();
     QTreeWidgetItem* createChildItem(int recordId, bool checked);
     QTreeWidgetItem* ensureAddGroup();
     QTreeWidgetItem* createGroup(const QString& baseLabel);
@@ -113,6 +145,12 @@ private:
     void rebuildGroupedTree(QVector<BatchCluster> clusters);
     void refreshGroupLabels();
     QVector<QTreeWidgetItem*> allChildItems() const;
+    bool isGroupItem(const QTreeWidgetItem* item) const;
+    QVector<QTreeWidgetItem*> groupChildren(const QTreeWidgetItem* group) const;
+    void buildGroupMenu(QMenu& menu, const QTreeWidgetItem* group) const;
+    void applyGroupAction(QTreeWidgetItem* group, int actionId);
+    void setAllGroupsExpanded(bool expanded);
+    void keepOnlyBest(QTreeWidgetItem* group);
     QVector<QTreeWidgetItem*> checkedItems() const;
     QVector<QTreeWidgetItem*> selectedChildItems() const;
     QVector<QTreeWidgetItem*> contextTargetItems(QTreeWidgetItem* clicked) const;
@@ -154,6 +192,9 @@ private:
     QStringList m_baseHeaders;
     QPointer<QThread> m_thread;
     BatchCompareWorker* m_worker;
+    BatchItemDelegate* m_delegate;
+    QTimer* m_thumbnailRefresh;
+    int m_thumbnailColumnWidth;
     int m_nextRecordId;
     bool m_hasCompared;
     bool m_comparing;
