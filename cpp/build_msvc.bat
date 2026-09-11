@@ -29,6 +29,12 @@ if errorlevel 1 exit /b 1
 cl /nologo /std:c++17 /O2 /EHsc /utf-8 /I"%OPENCV_INC%" test_visual_fingerprint.cpp /Fe:vividmatch_image_test.exe /link /LIBPATH:"%OPENCV_LIB%" opencv_world500.lib
 if errorlevel 1 exit /b 1
 
+cl /nologo /std:c++17 /O2 /EHsc /utf-8 /I"%OPENCV_INC%" video_tool.cpp /Fe:vividmatch_video.exe /link /LIBPATH:"%OPENCV_LIB%" opencv_world500.lib
+if errorlevel 1 exit /b 1
+
+cl /nologo /std:c++17 /O2 /EHsc /utf-8 /I"%OPENCV_INC%" test_video_fingerprint.cpp /Fe:vividmatch_video_test.exe /link /LIBPATH:"%OPENCV_LIB%" opencv_world500.lib
+if errorlevel 1 exit /b 1
+
 popd
 
 echo build ok
