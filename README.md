@@ -53,6 +53,25 @@ gui\package_gui.bat
 The portable app is written to `dist\VividMatchGui\` and can be run there
 without installing Qt or OpenCV.
 
+## Sample images
+
+`samples/` holds generated pictures for exercising the tools by hand:
+
+- `photo_a_800x600.png`, `photo_a_400x300.png` and `photo_tall_300x600.png` are
+  the same picture at different sizes / aspect ratios, so they must land in one
+  相似组 (they score 100% against each other).
+- `photo_b_640x480.png` is a different picture, so it must land in the
+  无相同图片 group (about 57-61% against the others).
+
+Regenerate them with:
+
+```bash
+python tests/fixtures/make_fixtures.py
+```
+
+`tests/test_samples.py` re-derives the same set into a temporary directory and
+asserts on that grouping, so the samples cannot drift into something useless.
+
 ## Python reference implementation
 
 An equivalent Python/OpenCV implementation is also kept for experiments:
