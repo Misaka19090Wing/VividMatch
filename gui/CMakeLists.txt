@@ -22,6 +22,10 @@ qt_add_executable(VividMatchGui WIN32
     src/ui/main/mainwin.h
     src/ui/main/imagecomparepage.cpp
     src/ui/main/imagecomparepage.h
+    src/ui/main/batchcompareworker.cpp
+    src/ui/main/batchcompareworker.h
+    src/ui/main/batchcomparepage.cpp
+    src/ui/main/batchcomparepage.h
 )
 
 target_include_directories(VividMatchGui PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/../cpp")

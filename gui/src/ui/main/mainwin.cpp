@@ -1,5 +1,6 @@
 #include "mainwin.h"
 
+#include "batchcomparepage.h"
 #include "imagecomparepage.h"
 
 #include <QAction>
@@ -19,6 +20,7 @@ MainWin::MainWin(QWidget* parent)
     , m_stack(new QStackedWidget(this))
     , m_homePage(createHomePage())
     , m_imagePage(new ImageComparePage(this))
+    , m_batchPage(new BatchComparePage(this))
 {
     setWindowTitle(tr("VividMatch - 跨分辨率图片识别"));
     resize(980, 680);
@@ -28,9 +30,12 @@ MainWin::MainWin(QWidget* parent)
 
     m_stack->addWidget(m_homePage);
     m_stack->addWidget(m_imagePage);
+    m_stack->addWidget(m_batchPage);
     setCentralWidget(m_stack);
     showHomePage();
     connect(m_imagePage, &ImageComparePage::backRequested,
+            this, &MainWin::showHomePage, Qt::UniqueConnection);
+    connect(m_batchPage, &BatchComparePage::backRequested,
             this, &MainWin::showHomePage, Qt::UniqueConnection);
 
     setStyleSheet(QStringLiteral(R"(
@@ -104,12 +109,20 @@ QWidget* MainWin::createHomePage()
     imageButton->setText(tr("图片比对模式\n选择两张图片，判断是否为同一画面"));
     connect(imageButton, &QPushButton::released, this, &MainWin::showImageComparePage);
 
+    QPushButton* batchButton = new QPushButton(optionArea);
+    batchButton->setObjectName(QStringLiteral("modeButton"));
+    batchButton->setMinimumWidth(420);
+    batchButton->setCursor(Qt::PointingHandCursor);
+    batchButton->setText(tr("批量图片比对模式\n批量添加图片并自动分组相同图片"));
+    connect(batchButton, &QPushButton::released, this, &MainWin::showBatchComparePage);
+
     QPushButton* videoButton = new QPushButton(tr("视频比对模式（待实现）"), optionArea);
     videoButton->setObjectName(QStringLiteral("modeButton"));
     videoButton->setMinimumWidth(420);
     videoButton->setEnabled(false);
 
     options->addWidget(imageButton, 0, Qt::AlignHCenter);
+    options->addWidget(batchButton, 0, Qt::AlignHCenter);
     options->addWidget(videoButton, 0, Qt::AlignHCenter);
     options->addStretch(1);
 
@@ -137,4 +150,10 @@ void MainWin::showImageComparePage()
 {
     m_stack->setCurrentWidget(m_imagePage);
     setWindowTitle(tr("VividMatch - 图片比对"));
+}
+
+void MainWin::showBatchComparePage()
+{
+    m_stack->setCurrentWidget(m_batchPage);
+    setWindowTitle(tr("VividMatch - 批量图片比对"));
 }

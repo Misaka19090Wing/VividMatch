@@ -31,7 +31,10 @@ threshold is `0.78`.
 
 A Qt 6 GUI based on the `XMuli/myapp-template` template lets the user choose
 the image-compare mode from a function-selection page, pick two images, and
-see the similarity result.
+see the similarity result. The home page also exposes a batch image-compare
+mode for folders, multiple selections or drag-and-drop; results are grouped by
+similarity in collapsible Explorer-style groups, and each duplicate group keeps
+only the selected best image checked.
 
 ```bat
 gui\build_gui.bat

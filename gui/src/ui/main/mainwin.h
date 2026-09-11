@@ -5,6 +5,7 @@
 
 class QStackedWidget;
 
+class BatchComparePage;
 class ImageComparePage;
 
 class MainWin : public QMainWindow
@@ -20,11 +21,13 @@ private:
     QWidget* createHomePage();
     void showHomePage();
     void showImageComparePage();
+    void showBatchComparePage();
 
 private:
     QStackedWidget* m_stack;
     QWidget* m_homePage;
     ImageComparePage* m_imagePage;
+    BatchComparePage* m_batchPage;
 };
 
 #endif // MAINWIN_H

@@ -10,6 +10,24 @@ fingerprint comparison from `../cpp/visual_fingerprint.hpp`.
 Images can be selected with the buttons or dragged from the file manager and
 dropped onto the matching preview panel.
 
+Batch mode accepts a whole folder, multiple image files, or drag-and-drop.
+Every row shows a thumbnail, file name, resolution, type, size, modification
+date, path and bit depth. After comparison, duplicate groups are ordered by
+similarity at the top; the selection policy decides which image of each group
+stays checked (default: highest resolution). "不取消勾选" keeps every image in
+a duplicate group checked.
+
+Batch list controls:
+
+- Groups behave like Explorer groups and can be collapsed or expanded.
+- Click a header to cycle ascending -> descending -> unsorted.
+- Ctrl+click headers to add secondary and further sort fields.
+- Right-click the header to show or hide columns; drag headers to reorder them.
+- Enter opens the selected image, Delete removes it from the list, and Ctrl+F
+  focuses the locate/search field.
+- Double-click opens an image; the right-click menu provides copy path,
+  properties, open containing folder, remove, delete and compare actions.
+
 Build:
 
 ```bat
