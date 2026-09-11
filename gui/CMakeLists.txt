@@ -26,9 +26,15 @@ qt_add_executable(VividMatchGui WIN32
     src/ui/main/batchcompareworker.h
     src/ui/main/batchcomparepage.cpp
     src/ui/main/batchcomparepage.h
+    src/ui/main/videocomparepage.cpp
+    src/ui/main/videocomparepage.h
 )
 
-target_include_directories(VividMatchGui PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/../cpp")
+# The video page fingerprints clips with the C++ video/audio headers, so it
+# needs OpenCV's include and library directories.
+target_include_directories(VividMatchGui PRIVATE
+    "${CMAKE_CURRENT_SOURCE_DIR}/../cpp"
+    ${OpenCV_INCLUDE_DIRS})
 target_link_libraries(VividMatchGui PRIVATE Qt${QT_VERSION_MAJOR}::Widgets ${OpenCV_LIBS})
 
 set_target_properties(VividMatchGui PROPERTIES

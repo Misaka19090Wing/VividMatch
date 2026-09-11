@@ -2,6 +2,7 @@
 
 #include "batchcomparepage.h"
 #include "imagecomparepage.h"
+#include "videocomparepage.h"
 
 #include <QAction>
 #include <QFont>
@@ -21,6 +22,7 @@ MainWin::MainWin(QWidget* parent)
     , m_homePage(createHomePage())
     , m_imagePage(new ImageComparePage(this))
     , m_batchPage(new BatchComparePage(this))
+    , m_videoPage(new VideoComparePage(this))
 {
     setWindowTitle(tr("VividMatch - 跨分辨率图片识别"));
     resize(980, 680);
@@ -31,11 +33,14 @@ MainWin::MainWin(QWidget* parent)
     m_stack->addWidget(m_homePage);
     m_stack->addWidget(m_imagePage);
     m_stack->addWidget(m_batchPage);
+    m_stack->addWidget(m_videoPage);
     setCentralWidget(m_stack);
     showHomePage();
     connect(m_imagePage, &ImageComparePage::backRequested,
             this, &MainWin::showHomePage, Qt::UniqueConnection);
     connect(m_batchPage, &BatchComparePage::backRequested,
+            this, &MainWin::showHomePage, Qt::UniqueConnection);
+    connect(m_videoPage, &VideoComparePage::backRequested,
             this, &MainWin::showHomePage, Qt::UniqueConnection);
 
     setStyleSheet(QStringLiteral(R"(
@@ -116,10 +121,11 @@ QWidget* MainWin::createHomePage()
     batchButton->setText(tr("批量图片比对模式\n批量添加图片并自动分组相同图片"));
     connect(batchButton, &QPushButton::released, this, &MainWin::showBatchComparePage);
 
-    QPushButton* videoButton = new QPushButton(tr("视频比对模式（待实现）"), optionArea);
+    QPushButton* videoButton = new QPushButton(tr("视频比对模式\n比对两段视频的画面与声音"), optionArea);
     videoButton->setObjectName(QStringLiteral("modeButton"));
     videoButton->setMinimumWidth(420);
-    videoButton->setEnabled(false);
+    videoButton->setCursor(Qt::PointingHandCursor);
+    connect(videoButton, &QPushButton::released, this, &MainWin::showVideoComparePage);
 
     options->addWidget(imageButton, 0, Qt::AlignHCenter);
     options->addWidget(batchButton, 0, Qt::AlignHCenter);
@@ -156,4 +162,10 @@ void MainWin::showBatchComparePage()
 {
     m_stack->setCurrentWidget(m_batchPage);
     setWindowTitle(tr("VividMatch - 批量图片比对"));
+}
+
+void MainWin::showVideoComparePage()
+{
+    m_stack->setCurrentWidget(m_videoPage);
+    setWindowTitle(tr("VividMatch - 视频比对"));
 }
