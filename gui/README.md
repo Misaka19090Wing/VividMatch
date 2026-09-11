@@ -17,6 +17,16 @@ similarity at the top; the selection policy decides which image of each group
 stays checked (default: highest resolution). "不取消勾选" keeps every image in
 a duplicate group checked.
 
+Video mode picks two clips and runs the visual, temporal and audio layers from
+`../cpp/video_fingerprint.hpp` / `../cpp/audio_fingerprint.hpp` on a worker
+thread, showing a poster frame and the resolution / frame rate / duration of
+each clip. The result panel reports the verdict plus the numbers behind it:
+sampled and matched frames, the monotonic chain length, coverage, chain
+completeness, mean frame similarity, and the audio similarity over the aligned
+seconds. The frame-match threshold is adjustable and the audio layer can be
+switched off. The audio layer needs the `ffmpeg` command line on `PATH`; without
+it the verdict falls back to the visual/temporal result.
+
 Batch list controls:
 
 - Groups behave like Explorer groups and can be collapsed or expanded.

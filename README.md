@@ -27,6 +27,44 @@ cpp\vividmatch_image_test.exe
 `build_msvc.bat` accepts the OpenCV root as its first argument. The default
 threshold is `0.78`.
 
+### Video comparison
+
+`cpp/video_fingerprint.hpp` and `cpp/audio_fingerprint.hpp` implement the visual,
+temporal and audio layers of `strategy.md`. A video is reduced to one visual
+fingerprint per second (the same block-DCT hash used for images); two videos are
+matched frame by frame; the 时间轴单调性校验 runs on those matches; and the
+soundtrack is compared only over the seconds that aligned visually:
+
+```bash
+cpp\vividmatch_video.exe compare first.mp4 second.mp4
+cpp\vividmatch_video.exe compare first.mp4 second.mp4 0.78 --no-audio
+cpp\vividmatch_video.exe summary clip.mp4
+cpp\vividmatch_video_test.exe
+```
+
+The verdict is the 视听融合矩阵 from `strategy.md`, restricted to the cases this
+implementation can tell apart:
+
+| verdict | meaning |
+| --- | --- |
+| `identical` | the shorter video is matched by one monotonic chain and the soundtrack agrees: same content, only resolution / codec / bitrate differ. Also returned when the picture matches poorly but the sound matches well (the "audio veto" case for a heavily obscured picture) |
+| `reencoded` | the picture matches but the soundtrack does not: 画面相同但BGM被替换 |
+| `montage` | matches exist but cannot all sit on one monotonic chain (混剪拼接 or a rewind) |
+| `partial` | the matched part is in order but does not cover the shorter video |
+| `different` | no sampled frame matched |
+
+`compare` exits `0` only for `identical`, so it can be used from a script. The
+per-frame threshold (default `0.78`) can be passed as a third argument, and
+`--no-audio` skips the audio layer. Frame sampling reads the video sequentially
+rather than seeking, so two versions of a clip line up even at different frame
+rates or resolutions.
+
+Audio is decoded by the `ffmpeg` command line (found on `PATH`), because the
+OpenCV build this project targets exposes no audio decoding API. The STFT uses a
+small radix-2 FFT written in `audio_fingerprint.hpp` rather than FFTW, so OpenCV
+stays the only library dependency. When `ffmpeg` is missing the audio layer
+reports itself unavailable and the visual/temporal verdict stands alone.
+
 ## Qt GUI (VividMatchGui)
 
 A Qt 6 GUI based on the `XMuli/myapp-template` template lets the user choose
