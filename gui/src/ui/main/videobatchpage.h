@@ -3,9 +3,11 @@
 
 #include <QDateTime>
 #include <QHash>
+#include <QImage>
 #include <QMetaType>
 #include <QObject>
 #include <QPointer>
+#include <QSet>
 #include <QString>
 #include <QStringList>
 #include <QVector>
@@ -18,6 +20,7 @@ class QLabel;
 class QLineEdit;
 class QProgressBar;
 class QPushButton;
+class QStyledItemDelegate;
 class QThread;
 class QTreeWidget;
 class QTreeWidgetItem;
@@ -113,6 +116,9 @@ public:
 
 signals:
     void backRequested();
+    // Emitted when a background frame grab finishes; an empty image means the
+    // clip could not be read as a picture.
+    void thumbnailReady(const QString& path, const QImage& image);
 
 protected:
     bool eventFilter(QObject* watched, QEvent* event) override;
@@ -148,6 +154,7 @@ private:
     // Columns of the list.
     enum Column {
         CheckColumn = 0,
+        PreviewColumn,
         NameColumn,
         ResolutionColumn,
         DurationColumn,
@@ -155,6 +162,11 @@ private:
         ModifiedColumn,
         ColumnCount,
     };
+
+    // Keeps the checkbox hugging the left of its column and scales the preview
+    // frame to whatever width that column currently has, so dragging the column
+    // edge really resizes the picture and the row grows to fit it.
+    class VideoBatchItemDelegate;
 
     // A clip in the list. Rows are created as soon as a clip is added, so the
     // list is never empty while a comparison is pending.
@@ -165,6 +177,8 @@ private:
         qint64 fileSize = 0;
         QDateTime modified;
         QString modifiedText;
+        // Preview frame, grabbed in the background after the clip is added.
+        QImage thumbnail;
         // Filled in by the comparison; a dash is shown until then because these
         // two need the clip to be read.
         bool measured = false;
@@ -174,6 +188,10 @@ private:
     };
 
     void addPaths(const QStringList& paths);
+    // Starts background frame grabs for clips that do not have a preview yet.
+    void requestThumbnails();
+    void applyThumbnail(const QString& path, const QImage& image);
+    void updateCompareButton();
     // Rebuilds the result groups from an outcome.
     void rebuildTree(const VideoBatchOutcome& outcome);
     // Rebuilds only the clips that are not shown yet, leaving result groups in
@@ -214,6 +232,11 @@ private:
     QPushButton* m_removeButton;
     QPushButton* m_deleteButton;
     QLabel* m_status;
+
+    VideoBatchItemDelegate* m_delegate;
+    // Clips whose preview has been requested but not delivered yet, so a rebuild
+    // never queues the same grab twice.
+    QSet<QString> m_pendingThumbnails;
 
     QHash<int, RowData> m_records;
     QStringList m_listedPaths;  // clips already shown in the tree

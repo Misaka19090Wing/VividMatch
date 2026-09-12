@@ -25,14 +25,21 @@
 #include <QMenu>
 #include <QMessageBox>
 #include <QMimeData>
+#include <QPainter>
 #include <QProgressBar>
 #include <QPushButton>
 #include <QShortcut>
+#include <QStyledItemDelegate>
+#include <QStyleOptionButton>
 #include <QThread>
+#include <QThreadPool>
 #include <QTreeWidget>
 #include <QTreeWidgetItem>
 #include <QUrl>
 #include <QVBoxLayout>
+
+#include <opencv2/core.hpp>
+#include <opencv2/imgproc.hpp>
 
 #include <algorithm>
 #include <filesystem>
@@ -44,6 +51,17 @@ constexpr int kRecordIdRole = Qt::UserRole + 1;
 // replace it without touching the result groups.
 constexpr int kPendingMarker = -1;
 constexpr int kGroupBaseRole = Qt::UserRole + 2;
+constexpr int kThumbnailImageRole = Qt::UserRole + 3;
+
+// Padding kept between the preview column edges and the picture itself.
+constexpr int kThumbnailPadding = 6;
+// Width the grabbed frame is stored at. Only a memory cap: the delegate scales
+// the stored frame to whatever width the preview column has, so a larger column
+// still shows a larger picture.
+constexpr int kMaxPreviewWidth = 480;
+// A preview column narrower than this is no longer useful, so it stays readable
+// even when dragged.
+constexpr int kMinPreviewColumnWidth = 96;
 
 QStringList videoWildcards()
 {
@@ -81,6 +99,228 @@ QString formatDuration(double seconds)
     return QStringLiteral("%1:%2").arg(total / 60).arg(total % 60, 2, 10, QLatin1Char('0'));
 }
 
+// A frame to show as the clip's preview, or an empty Mat if the clip cannot be
+// read as a picture. The grab lands somewhere inside the clip rather than on the
+// very first frame, which for most videos is a title card or a fade from black
+// and so makes every clip look alike.
+cv::Mat grabPreviewFrame(const std::string& path)
+{
+    cv::VideoCapture capture(path, cv::CAP_FFMPEG);
+    if (!capture.isOpened()) {
+        capture.open(path);
+    }
+    if (!capture.isOpened()) {
+        return cv::Mat();
+    }
+
+    const double frames = capture.get(cv::CAP_PROP_FRAME_COUNT);
+    const double fps = capture.get(cv::CAP_PROP_FPS);
+    if (capture.set(cv::CAP_PROP_POS_FRAMES, 0)) {
+        // Somewhere between 10% and 90% of the clip. A time-based seek is used
+        // rather than a frame index because frame-exact seeking is slower and
+        // this only has to land in the right part of the clip.
+        const double duration = fps > 0.0 ? frames / fps : 0.0;
+        if (duration > 0.0) {
+            const double target =
+                duration * (0.1 + 0.8 * (static_cast<double>(std::rand() % 1000) / 1000.0));
+            capture.set(cv::CAP_PROP_POS_MSEC, target * 1000.0);
+        }
+    }
+
+    cv::Mat frame;
+    // Seeking can land slightly off; take the first frame that arrives.
+    for (int attempt = 0; attempt < 3 && frame.empty(); ++attempt) {
+        if (!capture.read(frame)) {
+            break;
+        }
+    }
+    capture.release();
+    if (frame.empty()) {
+        return frame;
+    }
+
+    // Cap the stored size to bound memory across a large batch. The aspect ratio
+    // is preserved, and the delegate scales the result up or down to the column,
+    // so a wider column still shows a wider picture.
+    if (frame.cols > kMaxPreviewWidth) {
+        cv::Mat scaled;
+        const double scale = static_cast<double>(kMaxPreviewWidth) / frame.cols;
+        cv::resize(frame, scaled,
+                   cv::Size(kMaxPreviewWidth,
+                            std::max(1, static_cast<int>(frame.rows * scale))),
+                   0.0, 0.0, cv::INTER_AREA);
+        return scaled;
+    }
+    return frame;
+}
+
+QImage matToImage(const cv::Mat& frame)
+{
+    if (frame.empty()) {
+        return QImage();
+    }
+    // BGR (OpenCV's order) to RGB, which is what QImage wants.
+    cv::Mat rgb;
+    cv::cvtColor(frame, rgb, cv::COLOR_BGR2RGB);
+    return QImage(rgb.data, rgb.cols, rgb.rows, static_cast<int>(rgb.step),
+                  QImage::Format_RGB888)
+        .copy();  // copy: the QImage must outlive `rgb`
+}
+
+}  // namespace
+
+// Rect the checkbox indicator occupies inside the check column. Left-aligning it
+// right after the cell start keeps it hugging the 选中 header instead of drifting
+// to the middle of the column when that column is widened.
+static QRect checkBoxRect(const QStyleOptionViewItem& option)
+{
+    QStyleOptionButton indicator;
+    indicator.state = QStyle::State_Enabled;
+    indicator.rect = option.rect;
+    indicator.direction = option.direction;
+    indicator.fontMetrics = option.fontMetrics;
+    const QRect indicatorRect =
+        option.widget->style()->subElementRect(QStyle::SE_ItemViewItemCheckIndicator,
+                                               &indicator, option.widget);
+    const QSize size = indicatorRect.size();
+    const int maxX = option.rect.right() - size.width() + 1;
+    const int x = std::min(option.rect.x(), maxX);
+    return QRect(x, option.rect.y() + (option.rect.height() - size.height()) / 2,
+                 size.width(), size.height());
+}
+
+// --- preview delegate ------------------------------------------------------
+
+// Keeps the checkbox left-aligned in its column and scales the preview frame to
+// the current width of the preview column, so dragging that column edge really
+// resizes the picture instead of just widening empty space.
+class VideoBatchPage::VideoBatchItemDelegate : public QStyledItemDelegate
+{
+public:
+    explicit VideoBatchItemDelegate(QObject* parent = nullptr)
+        : QStyledItemDelegate(parent)
+    {
+    }
+
+    void setPreviewColumnWidth(int width) { m_previewColumnWidth = std::max(1, width); }
+
+    QSize sizeHint(const QStyleOptionViewItem& option,
+                   const QModelIndex& index) const override
+    {
+        // Group rows span the whole row, so their height must not follow the
+        // preview column width. Only real clips carry a record id.
+        const bool isClip =
+            index.sibling(index.row(), CheckColumn).data(kRecordIdRole).toInt() > 0;
+        if (isClip && index.column() == PreviewColumn) {
+            return QSize(m_previewColumnWidth,
+                         previewHeight(index, m_previewColumnWidth) + 2 * kThumbnailPadding);
+        }
+        return QStyledItemDelegate::sizeHint(option, index);
+    }
+
+    void paint(QPainter* painter, const QStyleOptionViewItem& option,
+               const QModelIndex& index) const override
+    {
+        if (index.column() == CheckColumn) {
+            paintCheckColumn(painter, option, index);
+            return;
+        }
+        if (index.column() == PreviewColumn) {
+            paintPreviewColumn(painter, option, index);
+            return;
+        }
+        QStyledItemDelegate::paint(painter, option, index);
+    }
+
+    // Height the preview occupies when its column is columnWidth wide.
+    static int previewHeight(const QModelIndex& index, int columnWidth)
+    {
+        const int available = std::max(1, columnWidth - 2 * kThumbnailPadding);
+        const QImage image = index.data(kThumbnailImageRole).value<QImage>();
+        if (image.isNull() || image.width() <= 0 || image.height() <= 0) {
+            return available * 9 / 16;  // a 16:9 placeholder before the grab lands
+        }
+        return std::max(1, image.height() * available / image.width());
+    }
+
+private:
+    void paintCheckColumn(QPainter* painter, const QStyleOptionViewItem& option,
+                          const QModelIndex& index) const
+    {
+        if (!(index.flags() & Qt::ItemIsUserCheckable)) {
+            QStyledItemDelegate::paint(painter, option, index);
+            return;
+        }
+
+        QStyleOptionViewItem adjusted(option);
+        initStyleOption(&adjusted, index);
+        adjusted.features &= ~QStyleOptionViewItem::HasCheckIndicator;
+        adjusted.text.clear();
+        adjusted.icon = QIcon();
+
+        QStyle* style = option.widget->style();
+        style->drawPrimitive(QStyle::PE_PanelItemViewItem, &adjusted, painter,
+                             option.widget);
+
+        QStyleOptionButton indicator;
+        indicator.state = QStyle::State_Enabled;
+        if (option.state & QStyle::State_MouseOver) {
+            indicator.state |= QStyle::State_MouseOver;
+        }
+        indicator.rect = checkBoxRect(option);
+        indicator.direction = option.direction;
+        indicator.fontMetrics = option.fontMetrics;
+        switch (index.data(Qt::CheckStateRole).toInt()) {
+            case Qt::Checked:
+                indicator.state |= QStyle::State_On;
+                break;
+            case Qt::PartiallyChecked:
+                indicator.state |= QStyle::State_NoChange;
+                break;
+            default:
+                indicator.state |= QStyle::State_Off;
+                break;
+        }
+        style->drawPrimitive(QStyle::PE_IndicatorItemViewItemCheck, &indicator, painter,
+                             option.widget);
+    }
+
+    void paintPreviewColumn(QPainter* painter, const QStyleOptionViewItem& option,
+                            const QModelIndex& index) const
+    {
+        QStyleOptionViewItem adjusted(option);
+        initStyleOption(&adjusted, index);
+        adjusted.text.clear();
+        adjusted.icon = QIcon();
+
+        QStyle* style = option.widget->style();
+        style->drawPrimitive(QStyle::PE_PanelItemViewItem, &adjusted, painter,
+                             option.widget);
+
+        const QImage image = index.data(kThumbnailImageRole).value<QImage>();
+        if (image.isNull()) {
+            return;
+        }
+        const QRect target =
+            option.rect.adjusted(kThumbnailPadding, kThumbnailPadding, -kThumbnailPadding,
+                                 -kThumbnailPadding);
+        if (target.width() <= 0 || target.height() <= 0) {
+            return;
+        }
+        // Fit inside the cell without distorting: letterbox rather than stretch.
+        const QSize scaled = image.size().scaled(target.size(), Qt::KeepAspectRatio);
+        const QRect box(target.x() + (target.width() - scaled.width()) / 2,
+                        target.y() + (target.height() - scaled.height()) / 2,
+                        scaled.width(), scaled.height());
+        painter->save();
+        painter->setRenderHint(QPainter::SmoothPixmapTransform, true);
+        painter->drawImage(box, image);
+        painter->restore();
+    }
+
+    int m_previewColumnWidth = 160;
+};
+
 // Heading for one result group. Built here rather than in the page so the worker
 // can label a group before it is handed over.
 QString groupLabel(const VideoBatchGroupInfo& group)
@@ -101,7 +341,37 @@ QString groupLabel(const VideoBatchGroupInfo& group)
     return QCoreApplication::translate("videobatchpage", "无重复");
 }
 
-}  // namespace
+// One preview grab, run on the global thread pool. Pooling keeps the UI
+// responsive while a folder of clips is being read, and a plain runnable avoids
+// sharing any state beyond the path it was handed.
+class ThumbnailTask : public QRunnable
+{
+public:
+    ThumbnailTask(QString path, VideoBatchPage* page)
+        : m_path(std::move(path))
+        , m_page(page)
+    {
+        setAutoDelete(true);
+    }
+
+    void run() override
+    {
+        const std::string utf8 = m_path.toStdString();
+        const QImage image = matToImage(grabPreviewFrame(utf8));
+        // Delivered on the page's thread; an empty image still has to arrive so
+        // the page can stop waiting for this clip.
+        QMetaObject::invokeMethod(
+            m_page,
+            [page = m_page, path = m_path, image]() {
+                emit page->thumbnailReady(path, image);
+            },
+            Qt::QueuedConnection);
+    }
+
+private:
+    QString m_path;
+    VideoBatchPage* m_page;
+};
 
 // --- ranking ---------------------------------------------------------------
 
@@ -268,6 +538,7 @@ VideoBatchPage::VideoBatchPage(QWidget* parent)
     , m_removeButton(nullptr)
     , m_deleteButton(nullptr)
     , m_status(new QLabel(this))
+    , m_delegate(new VideoBatchItemDelegate(this))
     , m_nextRecordId(1)
     , m_lastClipCount(0)
     , m_lastDuplicateGroups(0)
@@ -366,8 +637,8 @@ VideoBatchPage::VideoBatchPage(QWidget* parent)
     connect(m_search, &QLineEdit::textChanged, this, &VideoBatchPage::searchChanged);
 
     m_tree->setColumnCount(ColumnCount);
-    m_tree->setHeaderLabels({tr("选中"), tr("名称"), tr("分辨率"), tr("时长"), tr("大小"),
-                             tr("修改日期")});
+    m_tree->setHeaderLabels({tr("选中"), tr("画面"), tr("名称"), tr("分辨率"), tr("时长"),
+                             tr("大小"), tr("修改日期")});
     m_tree->setRootIsDecorated(true);
     m_tree->setItemsExpandable(true);
     m_tree->setExpandsOnDoubleClick(true);
@@ -377,15 +648,33 @@ VideoBatchPage::VideoBatchPage(QWidget* parent)
     m_tree->setSelectionBehavior(QAbstractItemView::SelectRows);
     m_tree->setEditTriggers(QAbstractItemView::NoEditTriggers);
     m_tree->setContextMenuPolicy(Qt::CustomContextMenu);
+    m_tree->setUniformRowHeights(false);
+    m_tree->setItemDelegate(m_delegate);
     m_tree->header()->setStretchLastSection(true);
+    m_tree->header()->setMinimumSectionSize(24);
     m_tree->header()->resizeSection(CheckColumn, 52);
-    m_tree->header()->resizeSection(NameColumn, 420);
+    m_tree->header()->resizeSection(PreviewColumn, 160);
+    m_tree->header()->resizeSection(NameColumn, 380);
     m_tree->header()->resizeSection(ResolutionColumn, 100);
     m_tree->header()->resizeSection(DurationColumn, 80);
     m_tree->header()->resizeSection(SizeColumn, 100);
     m_tree->header()->setToolTip(
         tr("勾选要保留的视频；比对后按保留策略自动勾选。\n"
+           "拖动「画面」列宽会同步放大缩略图与行高。\n"
            "右键可对单个视频或整个分组操作。"));
+    m_delegate->setPreviewColumnWidth(m_tree->header()->sectionSize(PreviewColumn));
+
+    connect(m_tree->header(), &QHeaderView::sectionResized, this,
+            [this](int index, int, int newSize) {
+                if (index != PreviewColumn) {
+                    return;
+                }
+                m_delegate->setPreviewColumnWidth(newSize);
+                // The rows were laid out at the old preview size, and a resize
+                // alone does not re-measure them, so ask for a fresh layout: that
+                // is what makes the picture and the row height follow the edge.
+                m_tree->doItemsLayout();
+            });
 
     connect(m_tree, &QTreeWidget::customContextMenuRequested,
             this, &VideoBatchPage::showTreeContextMenu);
@@ -408,6 +697,9 @@ VideoBatchPage::VideoBatchPage(QWidget* parent)
         m_search->setFocus();
         m_search->selectAll();
     });
+
+    connect(this, &VideoBatchPage::thumbnailReady, this, &VideoBatchPage::applyThumbnail,
+            Qt::QueuedConnection);
 
     setBusy(false);
     updateStatus();
@@ -434,6 +726,68 @@ void VideoBatchPage::chooseVideos()
         this, tr("选择视频"), QString(),
         tr("视频 (*.mp4 *.mov *.mkv *.avi *.webm *.m4v);;所有文件 (*)"));
     addPaths(paths);
+}
+
+void VideoBatchPage::requestThumbnails()
+{
+    // Grabs run on the global pool; each result arrives on its own signal rather
+    // than blocking, so a folder of clips fills in progressively.
+    for (const RowData& row : m_records) {
+        if (!row.thumbnail.isNull() || m_pendingThumbnails.contains(row.path)) {
+            continue;
+        }
+        m_pendingThumbnails.insert(row.path);
+        QThreadPool::globalInstance()->start(new ThumbnailTask(row.path, this));
+    }
+}
+
+void VideoBatchPage::applyThumbnail(const QString& path, const QImage& image)
+{
+    m_pendingThumbnails.remove(path);
+    if (image.isNull()) {
+        // Remember the failure so a rebuild does not ask for it again.
+        return;
+    }
+
+    const int recordId = recordIdForPath(path);
+    if (recordId > 0) {
+        m_records[recordId].thumbnail = image;
+        // The stored frame is also the clip's measured resolution source, but the
+        // comparison reports that itself; do not overwrite it here.
+    }
+
+    // Attach the frame to every row showing this clip, then let the tree work out
+    // the new row height.
+    for (QTreeWidgetItem* item : allRowItems()) {
+        const RowData* row = recordForItem(item);
+        if (row != nullptr && QString::compare(row->path, path, Qt::CaseInsensitive) == 0) {
+            item->setData(PreviewColumn, kThumbnailImageRole, image);
+        }
+    }
+    // The delegate sizes rows from the stored image, so a repaint is what makes
+    // the row grow. Asking the view to re-evaluate the hint alone is not enough
+    // for rows already laid out.
+    m_tree->doItemsLayout();
+}
+
+void VideoBatchPage::updateCompareButton()
+{
+    // The button follows the ticks, not the list length: the ticks are what a run
+    // would compare, so after a comparison they mark one keeper per group and
+    // "开始比对" is offered only when there is really something to compare.
+    // Unchecking everything therefore disables it rather than silently comparing
+    // the whole list again.
+    const int checked = checkedItems().size();
+    const bool ready = !m_busy && checked >= 2;
+    m_compareButton->setEnabled(ready);
+    m_compareButton->setToolTip(
+        ready ? tr("比对已勾选的 %1 个视频").arg(checked)
+              : tr("至少勾选 2 个视频才能开始比对"));
+    // The hint only replaces a waiting prompt, never a result or a running stage.
+    if (!m_busy && checked < 2 && m_lastClipCount == 0
+        && m_progress->value() == m_progress->minimum()) {
+        m_progress->setFormat(tr("已勾选 %1 个，至少需要 2 个").arg(checked));
+    }
 }
 
 void VideoBatchPage::addPaths(const QStringList& paths)
@@ -585,6 +939,8 @@ void VideoBatchPage::rebuildPendingTree()
     if (first != nullptr) {
         m_tree->scrollToItem(first);
     }
+    // Start grabbing preview frames for the clips just added.
+    requestThumbnails();
     updateStatus();
 }
 
@@ -952,7 +1308,6 @@ void VideoBatchPage::deleteCheckedFiles()
 void VideoBatchPage::setBusy(bool busy)
 {
     m_busy = busy;
-    m_compareButton->setEnabled(!busy && m_records.size() >= 2);
     m_clearButton->setEnabled(!busy);
     m_policy->setEnabled(!busy);
     m_selectAllButton->setEnabled(!busy);
@@ -960,6 +1315,9 @@ void VideoBatchPage::setBusy(bool busy)
     m_removeButton->setEnabled(!busy);
     m_deleteButton->setEnabled(!busy);
     m_search->setEnabled(!busy);
+    // The compare button's enabled state depends on the ticks, so it is decided
+    // in one place rather than here.
+    updateCompareButton();
 }
 
 KeepPolicy VideoBatchPage::currentPolicy() const
@@ -1306,6 +1664,10 @@ void VideoBatchPage::searchChanged(const QString& text)
 
 void VideoBatchPage::updateStatus()
 {
+    // Called from every path that can change the ticks, the list or the busy
+    // state, which makes it the one place that keeps the compare button honest.
+    updateCompareButton();
+
     QString text = tr("共 %1 个视频，已勾选 %2 个").arg(m_records.size()).arg(checkedItems().size());
     if (m_lastClipCount > 0) {
         text += tr("，已比对 %1 个，重复组 %2 个")
