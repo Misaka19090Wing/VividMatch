@@ -76,20 +76,45 @@ MainWin::MainWin(QWidget* parent)
 
 MainWin::~MainWin() = default;
 
+QVector<MainWin::ModeEntry> MainWin::modeEntries() const
+{
+    return {
+        {tr("图片比对"), tr("图片比对模式\n选择两张图片，判断是否为同一画面"),
+         QKeySequence(QStringLiteral("Ctrl+1")), &MainWin::showImageComparePage},
+        {tr("批量图片比对"), tr("批量图片比对模式\n批量添加图片并自动分组相同图片"),
+         QKeySequence(QStringLiteral("Ctrl+2")), &MainWin::showBatchComparePage},
+        {tr("视频比对"), tr("视频比对模式\n比对两段视频的画面与声音"),
+         QKeySequence(QStringLiteral("Ctrl+3")), &MainWin::showVideoComparePage},
+        {tr("批量视频比对"), tr("批量视频比对模式\n批量添加视频并自动分组相同视频"),
+         QKeySequence(QStringLiteral("Ctrl+4")), &MainWin::showVideoBatchPage},
+    };
+}
+
 void MainWin::setupMenus()
 {
     QMenu* fileMenu = menuBar()->addMenu(tr("文件(&F)"));
-    QAction* imageAction = fileMenu->addAction(tr("图片比对"));
+
+    // One list drives the 文件 menu and the home page buttons, so adding a mode
+    // cannot leave the two out of step. The two-line label used on the buttons is
+    // flattened here because a menu entry is a single line.
+    const QVector<ModeEntry> modes = modeEntries();
+    for (const ModeEntry& mode : modes) {
+        QAction* action = fileMenu->addAction(mode.menuLabel);
+        action->setShortcut(mode.shortcut);
+        connect(action, &QAction::triggered, this, mode.show);
+    }
+
+    fileMenu->addSeparator();
+    // Enabled so the Escape shortcut keeps working from here; on the home page it
+    // is simply a no-op.
+    QAction* homeAction = fileMenu->addAction(tr("返回功能选择"));
+    homeAction->setShortcut(QKeySequence(Qt::Key_Escape));
+    connect(homeAction, &QAction::triggered, this, &MainWin::showHomePage);
+
     fileMenu->addSeparator();
     QAction* exitAction = fileMenu->addAction(tr("退出"));
-
-    connect(imageAction, &QAction::triggered, this, &MainWin::showImageComparePage);
+    exitAction->setShortcut(QKeySequence::Quit);
     connect(exitAction, &QAction::triggered, this, &QWidget::close);
-
-    QAction* backAction = new QAction(tr("返回功能选择"), this);
-    backAction->setShortcut(QKeySequence(Qt::Key_Escape));
-    addAction(backAction);
-    connect(backAction, &QAction::triggered, this, &MainWin::showHomePage);
 }
 
 QWidget* MainWin::createHomePage()
@@ -112,37 +137,18 @@ QWidget* MainWin::createHomePage()
     options->setContentsMargins(0, 0, 0, 0);
     options->setSpacing(14);
 
-    QPushButton* imageButton = new QPushButton(optionArea);
-    imageButton->setObjectName(QStringLiteral("modeButton"));
-    imageButton->setMinimumWidth(420);
-    imageButton->setCursor(Qt::PointingHandCursor);
-    imageButton->setText(tr("图片比对模式\n选择两张图片，判断是否为同一画面"));
-    connect(imageButton, &QPushButton::released, this, &MainWin::showImageComparePage);
-
-    QPushButton* batchButton = new QPushButton(optionArea);
-    batchButton->setObjectName(QStringLiteral("modeButton"));
-    batchButton->setMinimumWidth(420);
-    batchButton->setCursor(Qt::PointingHandCursor);
-    batchButton->setText(tr("批量图片比对模式\n批量添加图片并自动分组相同图片"));
-    connect(batchButton, &QPushButton::released, this, &MainWin::showBatchComparePage);
-
-    QPushButton* videoButton = new QPushButton(tr("视频比对模式\n比对两段视频的画面与声音"), optionArea);
-    videoButton->setObjectName(QStringLiteral("modeButton"));
-    videoButton->setMinimumWidth(420);
-    videoButton->setCursor(Qt::PointingHandCursor);
-    connect(videoButton, &QPushButton::released, this, &MainWin::showVideoComparePage);
-
-    QPushButton* videoBatchButton =
-        new QPushButton(tr("批量视频比对模式\n批量添加视频并自动分组相同视频"), optionArea);
-    videoBatchButton->setObjectName(QStringLiteral("modeButton"));
-    videoBatchButton->setMinimumWidth(420);
-    videoBatchButton->setCursor(Qt::PointingHandCursor);
-    connect(videoBatchButton, &QPushButton::released, this, &MainWin::showVideoBatchPage);
-
-    options->addWidget(imageButton, 0, Qt::AlignHCenter);
-    options->addWidget(batchButton, 0, Qt::AlignHCenter);
-    options->addWidget(videoButton, 0, Qt::AlignHCenter);
-    options->addWidget(videoBatchButton, 0, Qt::AlignHCenter);
+    // Built from the same list as the 文件 menu, so the two cannot drift apart.
+    for (const ModeEntry& mode : modeEntries()) {
+        QPushButton* button = new QPushButton(mode.buttonLabel, optionArea);
+        button->setObjectName(QStringLiteral("modeButton"));
+        button->setMinimumWidth(420);
+        button->setCursor(Qt::PointingHandCursor);
+        if (!mode.shortcut.isEmpty()) {
+            button->setToolTip(tr("快捷键 %1").arg(mode.shortcut.toString(QKeySequence::NativeText)));
+        }
+        connect(button, &QPushButton::released, this, mode.show);
+        options->addWidget(button, 0, Qt::AlignHCenter);
+    }
     options->addStretch(1);
 
     QHBoxLayout* centered = new QHBoxLayout;
