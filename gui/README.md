@@ -25,11 +25,13 @@ that file is missing the interface stays English, which is why it is the source.
 
 - On first run the language follows the operating system's UI language.
 - **文件 → 语言 / File → Language** offers *Follow the system*, *English* and
-  *Simplified Chinese*; the choice is stored with `QSettings`.
-- Switching is immediate. Qt sends `LanguageChange` and every page rebuilds its own
-  strings in `changeEvent()`; strings that embed numbers (the result panels, the
+  *Simplified Chinese*; the choice is stored with `QSettings`, and a notice says it
+  takes effect on the next start.
+- Every page implements `changeEvent()` and rebuilds its own strings on a
+  `LanguageChange` event, and strings that embed numbers (the result panels, the
   group headings, the status line) are regenerated from stored state rather than
-  re-translated, so they cannot go stale in the other language.
+  re-translated. That is a best effort, not a guarantee across every panel, which
+  is why the notice asks for a restart instead of promising an instant switch.
 
 `gui\build_gui.bat` builds the translation as part of the build and needs
 `lrelease` from the Qt Linguist tools. Without it the build warns and produces an

@@ -344,12 +344,14 @@ void MainWin::showRestartNotice()
     }
     m_restartNoticeShowing = true;
 
+    // Only the restart is promised. Asking the user to restart is what actually
+    // guarantees a consistent interface; a notice claiming the text has already
+    // changed would be wrong wherever it has not.
     QMessageBox box(this);
     box.setIcon(QMessageBox::Information);
-    box.setWindowTitle(tr("Language changed"));
-    box.setText(tr("The language has been switched."));
-    box.setInformativeText(tr("Most of the interface has already changed. Restart the "
-                              "application to apply the new language everywhere."));
+    box.setWindowTitle(tr("Language saved"));
+    box.setText(tr("The language setting has been saved."));
+    box.setInformativeText(tr("Restart the application for it to take effect everywhere."));
     box.setStandardButtons(QMessageBox::Ok);
     box.exec();
 

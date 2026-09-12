@@ -25,9 +25,9 @@
     "Chinese": "中文",
     "Simplified Chinese": "简体中文",
     "Follow the system (%1)": "跟随系统（%1）",
-    "Language changed": "语言已切换",
-    "The language has been switched.": "界面语言已切换。",
-    "Most of the interface has already changed. Restart the application to apply the new language everywhere.": "界面大部分已立即切换；重启软件后生效于全部界面。"
+    "Language saved": "语言设置已保存",
+    "The language setting has been saved.": "语言设置已保存。",
+    "Restart the application for it to take effect everywhere.": "重启软件后生效于全部界面。"
   },
   "ImageComparePage": {
     "Back to mode selection": "返回功能选择",

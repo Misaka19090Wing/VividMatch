@@ -167,10 +167,13 @@ English rather than falling back to Chinese, which a reader may not know.
 On first run the language follows the operating system (`QLocale::system()`); a
 `zh*` system gets Chinese, everything else English. **文件 → 语言 / File →
 Language** overrides it with *Follow the system*, *English* or *Simplified
-Chinese*, and the choice is remembered in `QSettings`. Switching applies
-immediately, without a restart: Qt sends a `LanguageChange` event and each page
-rebuilds its own text, including the result panels, whose numbers are re-rendered
-rather than re-translated.
+Chinese*, and the choice is remembered in `QSettings`.
+
+The new language takes effect on the **next start**: switching shows a notice
+saying so. Every page does implement `changeEvent()` and rebuilds its own strings
+when Qt sends `LanguageChange`, but that is not dependable across all panels, so
+the notice asks for a restart rather than claiming the interface has already
+changed.
 
 ```bat
 gui\build_gui.bat

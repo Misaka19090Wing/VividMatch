@@ -140,8 +140,11 @@ Qt 6 界面基于 `XMuli/myapp-template` 模板，从功能选择页进入不同
 
 首次运行跟随操作系统语言（`QLocale::system()`）：`zh*` 系统显示中文，其它显示英文。
 「文件 → 语言 / File → Language」可改为「跟随系统」「English」或「简体中文」，选择会
-记录在 `QSettings` 中。切换立即生效，无需重启：Qt 会发送 `LanguageChange` 事件，各页面
-据此重建自己的文案，包括结果面板 —— 那里的数字是重新渲染而不是重新翻译。
+记录在 `QSettings` 中。
+
+新语言在**下次启动时**生效：切换后会弹出提示说明这一点。各页面确实都实现了
+`changeEvent()`，在 Qt 派发 `LanguageChange` 时重建自身文案，但这一机制并不能在所有
+面板上可靠生效，因此提示只要求重启，而不声称界面已经改变。
 
 ```bat
 gui\build_gui.bat
