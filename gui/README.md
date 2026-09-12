@@ -40,11 +40,12 @@ visually, so a folder of long clips stays practical.
 
 Like the batch image page, it has a 选中 checkbox column, a 画面 preview column, a
 right-click menu on both clips and groups, a Ctrl+F locator, and 全选 / 反选 /
-移出勾选项 / 删除勾选文件. The preview frame is grabbed in the background (somewhere
-10%-90% into the clip, so it is not the title card) and scales with the column
-width, taking the row height with it. The 开始比对 button follows the ticks: it is
-enabled only while at least two clips are checked, so unchecking everything
-disables it rather than re-running the whole list.
+移出勾选项 / 删除勾选文件. The preview frame is grabbed in the background and scales
+with the column width, taking the row height with it. The 截帧位置 spin box sets how
+far into each clip the frame is taken (default 50%, the middle, because the first
+frame is often a title card); changing it applies on 重新截帧. The 开始比对 button
+follows the ticks: it is enabled only while at least two clips are checked, so
+unchecking everything disables it rather than re-running the whole list.
 
 Batch list controls:
 

@@ -20,6 +20,7 @@ class QLabel;
 class QLineEdit;
 class QProgressBar;
 class QPushButton;
+class QSpinBox;
 class QStyledItemDelegate;
 class QThread;
 class QTreeWidget;
@@ -191,6 +192,11 @@ private:
     // Starts background frame grabs for clips that do not have a preview yet.
     void requestThumbnails();
     void applyThumbnail(const QString& path, const QImage& image);
+    // Drops every stored preview and grabs them again, used after the capture
+    // position changes so the column shows frames from the new position.
+    void regrabThumbnails();
+    // Where in the clip the preview is taken from, as a percentage of its length.
+    int capturePositionPercent() const;
     void updateCompareButton();
     // Rebuilds the result groups from an outcome.
     void rebuildTree(const VideoBatchOutcome& outcome);
@@ -224,6 +230,7 @@ private:
     QTreeWidget* m_tree;
     QComboBox* m_policy;
     QLineEdit* m_search;
+    QSpinBox* m_capturePosition;
     QProgressBar* m_progress;
     QPushButton* m_compareButton;
     QPushButton* m_clearButton;

@@ -29,6 +29,7 @@
 #include <QProgressBar>
 #include <QPushButton>
 #include <QShortcut>
+#include <QSpinBox>
 #include <QStyledItemDelegate>
 #include <QStyleOptionButton>
 #include <QThread>
@@ -99,11 +100,17 @@ QString formatDuration(double seconds)
     return QStringLiteral("%1:%2").arg(total / 60).arg(total % 60, 2, 10, QLatin1Char('0'));
 }
 
+// Where in the clip the preview frame is taken from, as a percentage of its
+// length, unless the user picks another position.
+constexpr int kDefaultCapturePercent = 50;
+
 // A frame to show as the clip's preview, or an empty Mat if the clip cannot be
-// read as a picture. The grab lands somewhere inside the clip rather than on the
-// very first frame, which for most videos is a title card or a fade from black
-// and so makes every clip look alike.
-cv::Mat grabPreviewFrame(const std::string& path)
+// read as a picture.
+//
+// `percent` is how far into the clip to look, which the user controls: the first
+// frame of a video is often a title card or a fade from black, so the default is
+// the middle of the clip rather than its start.
+cv::Mat grabPreviewFrame(const std::string& path, int percent)
 {
     cv::VideoCapture capture(path, cv::CAP_FFMPEG);
     if (!capture.isOpened()) {
@@ -115,16 +122,15 @@ cv::Mat grabPreviewFrame(const std::string& path)
 
     const double frames = capture.get(cv::CAP_PROP_FRAME_COUNT);
     const double fps = capture.get(cv::CAP_PROP_FPS);
-    if (capture.set(cv::CAP_PROP_POS_FRAMES, 0)) {
-        // Somewhere between 10% and 90% of the clip. A time-based seek is used
-        // rather than a frame index because frame-exact seeking is slower and
-        // this only has to land in the right part of the clip.
-        const double duration = fps > 0.0 ? frames / fps : 0.0;
-        if (duration > 0.0) {
-            const double target =
-                duration * (0.1 + 0.8 * (static_cast<double>(std::rand() % 1000) / 1000.0));
-            capture.set(cv::CAP_PROP_POS_MSEC, target * 1000.0);
-        }
+    const double seconds = fps > 0.0 ? frames / fps : 0.0;
+    if (seconds > 0.0) {
+        // Clamp so 100% does not seek past the end and fail outright.
+        const double fraction =
+            std::min(0.99, std::max(0.0, static_cast<double>(percent) / 100.0));
+        // A time-based seek is used rather than a frame index: it lands in the
+        // right part of the clip, which is all a preview needs, and frame-exact
+        // seeking is slower.
+        capture.set(cv::CAP_PROP_POS_MSEC, seconds * fraction * 1000.0);
     }
 
     cv::Mat frame;
@@ -347,8 +353,9 @@ QString groupLabel(const VideoBatchGroupInfo& group)
 class ThumbnailTask : public QRunnable
 {
 public:
-    ThumbnailTask(QString path, VideoBatchPage* page)
+    ThumbnailTask(QString path, int percent, VideoBatchPage* page)
         : m_path(std::move(path))
+        , m_percent(percent)
         , m_page(page)
     {
         setAutoDelete(true);
@@ -357,7 +364,7 @@ public:
     void run() override
     {
         const std::string utf8 = m_path.toStdString();
-        const QImage image = matToImage(grabPreviewFrame(utf8));
+        const QImage image = matToImage(grabPreviewFrame(utf8, m_percent));
         // Delivered on the page's thread; an empty image still has to arrive so
         // the page can stop waiting for this clip.
         QMetaObject::invokeMethod(
@@ -370,6 +377,7 @@ public:
 
 private:
     QString m_path;
+    int m_percent;
     VideoBatchPage* m_page;
 };
 
@@ -629,6 +637,25 @@ VideoBatchPage::VideoBatchPage(QWidget* parent)
     m_search->hide();
     searchRow->addWidget(m_search);
     searchRow->addSpacing(18);
+    // Where the preview frames are taken from. A spin box plus an explicit
+    // re-grab button rather than a live re-grab: grabbing a frame means seeking
+    // and decoding, so re-running it on every keystroke would be wasteful.
+    searchRow->addWidget(new QLabel(tr("截帧位置"), this));
+    m_capturePosition = new QSpinBox(this);
+    m_capturePosition->setRange(0, 99);
+    m_capturePosition->setValue(kDefaultCapturePercent);
+    m_capturePosition->setSuffix(tr(" %"));
+    m_capturePosition->setToolTip(
+        tr("缩略图取片长百分之多少处，默认 50%（片长中间）。\n"
+           "取 0% 是视频的第一帧，改成别的值后按「重新截帧」生效。"));
+    m_capturePosition->setMaximumWidth(84);
+    searchRow->addWidget(m_capturePosition);
+    QPushButton* regrabButton = new QPushButton(tr("重新截帧"), this);
+    regrabButton->setObjectName(QStringLiteral("secondaryButton"));
+    regrabButton->setToolTip(tr("按当前截帧位置重新抓取所有缩略图"));
+    connect(regrabButton, &QPushButton::released, this, &VideoBatchPage::regrabThumbnails);
+    searchRow->addWidget(regrabButton);
+    searchRow->addSpacing(18);
     searchRow->addWidget(m_progress, 1);
     m_progress->setRange(0, 1);
     m_progress->setValue(0);
@@ -728,17 +755,44 @@ void VideoBatchPage::chooseVideos()
     addPaths(paths);
 }
 
+int VideoBatchPage::capturePositionPercent() const
+{
+    return m_capturePosition != nullptr ? m_capturePosition->value()
+                                        : kDefaultCapturePercent;
+}
+
 void VideoBatchPage::requestThumbnails()
 {
     // Grabs run on the global pool; each result arrives on its own signal rather
     // than blocking, so a folder of clips fills in progressively.
+    const int percent = capturePositionPercent();
     for (const RowData& row : m_records) {
         if (!row.thumbnail.isNull() || m_pendingThumbnails.contains(row.path)) {
             continue;
         }
         m_pendingThumbnails.insert(row.path);
-        QThreadPool::globalInstance()->start(new ThumbnailTask(row.path, this));
+        QThreadPool::globalInstance()->start(new ThumbnailTask(row.path, percent, this));
     }
+}
+
+void VideoBatchPage::regrabThumbnails()
+{
+    if (m_records.isEmpty()) {
+        QMessageBox::information(this, tr("重新截帧"), tr("请先添加视频。"));
+        return;
+    }
+    // Drop what is stored so requestThumbnails() picks every clip up again. A
+    // grab that is still in flight for a clip will land and be kept, which is
+    // harmless: it is a frame from the same position.
+    for (auto it = m_records.begin(); it != m_records.end(); ++it) {
+        it.value().thumbnail = QImage();
+    }
+    for (QTreeWidgetItem* item : allRowItems()) {
+        item->setData(PreviewColumn, kThumbnailImageRole, QVariant());
+    }
+    m_tree->doItemsLayout();
+    requestThumbnails();
+    m_progress->setFormat(tr("正在按片长 %1% 处重新截帧").arg(capturePositionPercent()));
 }
 
 void VideoBatchPage::applyThumbnail(const QString& path, const QImage& image)
