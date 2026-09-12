@@ -250,21 +250,69 @@ inline std::string quoteArgument(const std::string& value) {
     return "\"" + value + "\"";
 }
 
-// Runs ffmpeg through cmd.exe with output redirected to a file. Using a command
-// line avoids the pipe plumbing while keeping the whole thing local: nothing is
-// uploaded and no network is touched.
+// Turns ffmpeg's own message into something the user can act on. "No audio
+// track" is by far the most common case and is not an error the user needs to
+// fix, so it must not read like a broken install.
+inline std::string explainFfmpegFailure(const std::string& output) {
+    if (output.find("does not contain any stream") != std::string::npos
+        || output.find("Could not find audio") != std::string::npos
+        || output.find("does not contain stream") != std::string::npos) {
+        return "this file has no audio track";
+    }
+    if (output.find("Invalid data found") != std::string::npos
+        || output.find("moov atom not found") != std::string::npos) {
+        return "the file could not be read (truncated or unsupported container)";
+    }
+    if (output.find("Permission denied") != std::string::npos) {
+        return "ffmpeg was denied access to the file or the temporary folder";
+    }
+    if (output.find("No space left") != std::string::npos) {
+        return "no space left for the temporary audio file";
+    }
+    return "ffmpeg could not decode an audio track";
+}
+
+// Reads the whole capture file, keeping only the last few lines: ffmpeg puts the
+// actual reason at the end.
+inline std::string tailOfFile(const std::string& path, std::size_t maxLength = 500) {
+    std::ifstream stream(path, std::ios::binary);
+    if (!stream) {
+        return std::string();
+    }
+    std::string content((std::istreambuf_iterator<char>(stream)),
+                        std::istreambuf_iterator<char>());
+    if (content.size() > maxLength) {
+        content = content.substr(content.size() - maxLength);
+    }
+    for (char& character : content) {
+        if (character == '\r' || character == '\n' || character == '\t') {
+            character = ' ';
+        }
+    }
+    while (!content.empty() && content.back() == ' ') {
+        content.pop_back();
+    }
+    return content;
+}
+
+// Runs ffmpeg through cmd.exe with its output redirected to files. Using a
+// command line avoids the pipe plumbing while keeping the whole thing local:
+// nothing is uploaded and no network is touched. stderr is captured rather than
+// discarded, because it carries the reason the decode failed.
 inline bool runFfmpegToFile(const std::string& ffmpeg, const std::string& video,
                             const std::string& wavOut, std::string& error) {
+    const std::string logFile = wavOut + ".log";
     const std::string command = quoteArgument(ffmpeg)
                                 + " -nostdin -v error -y -i " + quoteArgument(video)
                                 + " -vn -ac 1 -ar " + std::to_string(kAudioSampleRate)
-                                + " -c:a pcm_s16le " + quoteArgument(wavOut);
+                                + " -c:a pcm_s16le " + quoteArgument(wavOut)
+                                + " > " + quoteArgument(logFile) + " 2>&1";
 
     std::string commandFile = wavOut + ".cmd";
     {
         std::ofstream script(commandFile, std::ios::binary);
         if (!script) {
-            error = "cannot create helper script";
+            error = "cannot create helper script in the temporary folder";
             return false;
         }
         script << "@echo off\r\n" << command << "\r\n";
@@ -297,9 +345,11 @@ inline bool runFfmpegToFile(const std::string& ffmpeg, const std::string& video,
     removeQuietly(commandFile);
 
     if (exitCode != 0) {
-        error = "ffmpeg could not decode an audio track";
+        error = explainFfmpegFailure(tailOfFile(logFile));
+        removeQuietly(logFile);
         return false;
     }
+    removeQuietly(logFile);
     return true;
 }
 
@@ -439,7 +489,8 @@ inline AudioFingerprint fingerprintAudio(const std::string& path,
 
     const std::string ffmpeg = detail::findFfmpeg(ffmpegPath);
     if (ffmpeg.empty()) {
-        fingerprint.error = "ffmpeg not found, audio layer skipped";
+        fingerprint.error =
+            "ffmpeg not found on PATH, so audio was not compared";
         return fingerprint;
     }
 
@@ -456,11 +507,11 @@ inline AudioFingerprint fingerprintAudio(const std::string& path,
     const bool read = detail::readWavPcm(wav, samples, sampleRate);
     detail::removeQuietly(wav);
     if (!read) {
-        fingerprint.error = "video has no decodable audio track";
+        fingerprint.error = "ffmpeg produced no usable audio data";
         return fingerprint;
     }
     if (samples.empty()) {
-        fingerprint.error = "audio track is empty";
+        fingerprint.error = "the audio track is empty";
         return fingerprint;
     }
 

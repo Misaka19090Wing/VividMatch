@@ -159,6 +159,37 @@ QString verdictExplanation(vividmatch::VideoVerdict verdict)
     return QString();
 }
 
+// The audio layer reports why it sat out. "No audio track" is normal and needs
+// no action, while a missing ffmpeg does, so they must not read the same.
+QString audioLayerNote(const vividmatch::AudioComparison& audio)
+{
+    if (audio.available) {
+        return QStringLiteral("音频：比对 %1 秒，相似度 %2%（RMS 差 %3）→ %4")
+            .arg(audio.comparedSeconds)
+            .arg(audio.meanSimilarity * 100.0, 0, 'f', 1)
+            .arg(audio.meanRmsDifference, 0, 'f', 3)
+            .arg(audio.sameSoundtrack ? QStringLiteral("同一条音轨")
+                                      : QStringLiteral("音轨不同"));
+    }
+
+    const QString reason = QString::fromStdString(audio.error);
+    QString explained;
+    if (reason.contains(QStringLiteral("no audio track"))) {
+        explained = QStringLiteral("至少一段视频没有音轨，只看画面");
+    } else if (reason.contains(QStringLiteral("ffmpeg not found"))) {
+        explained = QStringLiteral("未找到 ffmpeg，装好并加入 PATH 后可启用音频比对");
+    } else if (reason.contains(QStringLiteral("could not be read"))) {
+        explained = QStringLiteral("音轨读取失败（文件损坏或容器不受支持）");
+    } else if (reason.contains(QStringLiteral("no aligned frames"))) {
+        explained = QStringLiteral("画面没有对齐的片段，无从比对音频");
+    } else if (reason.isEmpty()) {
+        explained = QStringLiteral("本次未启用");
+    } else {
+        explained = reason;
+    }
+    return QStringLiteral("音频：未参与（%1）").arg(explained);
+}
+
 }  // namespace
 
 // --- worker ----------------------------------------------------------------
@@ -515,19 +546,7 @@ void VideoComparePage::showResult(const vividmatch::VideoComparison& comparison)
                  .arg(comparison.bestMatchScore * 100.0, 0, 'f', 1)
                  .arg(comparison.frameThreshold, 0, 'f', 2);
 
-    if (comparison.audio.available) {
-        lines << tr("音频：比对 %1 秒，相似度 %2%（RMS 差 %3）→ %4")
-                     .arg(comparison.audio.comparedSeconds)
-                     .arg(comparison.audio.meanSimilarity * 100.0, 0, 'f', 1)
-                     .arg(comparison.audio.meanRmsDifference, 0, 'f', 3)
-                     .arg(comparison.audio.sameSoundtrack ? tr("同一条音轨")
-                                                          : tr("音轨不同"));
-    } else {
-        lines << tr("音频：未参与（%1）")
-                     .arg(comparison.audio.error.empty()
-                              ? tr("未启用或无对齐帧")
-                              : QString::fromStdString(comparison.audio.error));
-    }
+    lines << audioLayerNote(comparison.audio);
     m_metrics->setText(lines.join(QLatin1Char('\n')));
 }
 

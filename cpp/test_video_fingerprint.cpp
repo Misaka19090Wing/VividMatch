@@ -315,6 +315,43 @@ int main(int argc, char** argv) {
                                "concurrent and sequential extraction agree on the verdict");
         }
 
+        // --- the audio layer must explain itself -----------------------------
+        // These videos are written by cv::VideoWriter and so carry no audio at
+        // all, which is the most common reason the audio layer sits out. The
+        // message has to name the real cause: it is not a broken ffmpeg install
+        // and there is nothing for the user to repair.
+        {
+            const vividmatch::AudioFingerprint missing =
+                vividmatch::fingerprintAudio(path_a);
+            std::cout << "   audio on a silent clip: available=" << missing.available
+                      << " error=\"" << missing.error << "\"\n";
+            failures += expect(!missing.available,
+                               "audio layer reports silence as unavailable");
+            failures += expect(missing.error.find("no audio track") != std::string::npos,
+                               "a video without audio says so, not 'could not decode'");
+
+            const vividmatch::AudioFingerprint noFfmpeg =
+                vividmatch::fingerprintAudio(path_a, "Z:/definitely/not/ffmpeg.exe");
+            std::cout << "   audio with ffmpeg missing: error=\"" << noFfmpeg.error << "\"\n";
+            failures += expect(noFfmpeg.error.find("ffmpeg not found") != std::string::npos,
+                               "a missing ffmpeg is reported as a missing ffmpeg");
+
+            // The ffmpeg messages that actually occur get translated.
+            failures += expect(
+                vividmatch::detail::explainFfmpegFailure(
+                    "Output file does not contain any stream")
+                        .find("no audio track") != std::string::npos,
+                "ffmpeg's 'no stream' message is explained as a missing audio track");
+            failures += expect(
+                vividmatch::detail::explainFfmpegFailure("moov atom not found")
+                        .find("could not be read") != std::string::npos,
+                "ffmpeg's container error is explained as an unreadable file");
+            failures += expect(
+                vividmatch::detail::explainFfmpegFailure("some unknown failure")
+                        .find("could not decode") != std::string::npos,
+                "an unrecognised ffmpeg failure falls back to a generic message");
+        }
+
         // --- the longest increasing run itself ------------------------------
         {
             const std::vector<std::pair<int, int>> ordered = {{0, 0}, {1, 1}, {2, 2}};

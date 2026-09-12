@@ -70,8 +70,23 @@ acceleration makes reading *slower* than software.
 Audio is decoded by the `ffmpeg` command line (found on `PATH`), because the
 OpenCV build this project targets exposes no audio decoding API. The STFT uses a
 small radix-2 FFT written in `audio_fingerprint.hpp` rather than FFTW, so OpenCV
-stays the only library dependency. When `ffmpeg` is missing the audio layer
-reports itself unavailable and the visual/temporal verdict stands alone.
+stays the only library dependency.
+
+### When the audio layer sits out
+
+Both the CLI (`audio_skipped=`) and the GUI (`音频：未参与（...）`) name the reason,
+so it is clear whether anything needs fixing:
+
+| message | cause | what to do |
+| --- | --- | --- |
+| `this file has no audio track` | one of the clips is silent (screen recording, muted export, GIF-style source) | nothing - the verdict falls back to picture and timing |
+| `ffmpeg not found on PATH` | `ffmpeg.exe` is not installed or not on `PATH` | install ffmpeg (e.g. `winget install Gyan.FFmpeg`), reopen the app so it picks up the new `PATH`, or pass the full path to `fingerprintAudio` / `compareVideoFiles(..., ffmpegPath)` |
+| `the file could not be read` | truncated or unsupported container | re-export the clip, or check it plays in a media player |
+| `ffmpeg was denied access` | antivirus or folder permissions blocking ffmpeg on the file or the temp folder | allow ffmpeg in the antivirus, or fix the temp folder permissions |
+| `no aligned frames to compare audio on` | the pictures never matched, so there is no time correspondence | nothing - audio is compared only over the seconds that aligned visually |
+
+The names of the clips are not needed to diagnose this: the audio layer reports
+per file, so a single silent clip in the pair is enough to trigger the first row.
 
 ## Qt GUI (VividMatchGui)
 
