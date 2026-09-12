@@ -1,5 +1,7 @@
 #include "imagecomparepage.h"
 
+#include "formatutils.h"
+
 #include <opencv2/imgcodecs.hpp>
 
 #include "visual_fingerprint.hpp"
@@ -7,6 +9,7 @@
 #include <QDoubleSpinBox>
 #include <QDragEnterEvent>
 #include <QDropEvent>
+#include <QElapsedTimer>
 #include <QEvent>
 #include <QFile>
 #include <QFileDialog>
@@ -294,6 +297,11 @@ void ImageComparePage::compareSelectedImages()
         return;
     }
 
+    // Times the whole operation, decoding included: what the user waits for is
+    // "click to result", not just the hashing.
+    QElapsedTimer timer;
+    timer.start();
+
     cv::Mat first;
     cv::Mat second;
     if (!decodeImage(m_firstPath, first) || !decodeImage(m_secondPath, second)) {
@@ -306,14 +314,16 @@ void ImageComparePage::compareSelectedImages()
         const vividmatch::Fingerprint right = vividmatch::makeFingerprint(second);
         const double threshold = m_threshold->value();
         const double score = vividmatch::compareFingerprints(left, right);
-        setResult(score, threshold, left.width, left.height, right.width, right.height);
+        setResult(score, threshold, left.width, left.height, right.width, right.height,
+                  timer.elapsed());
     } catch (const std::exception& error) {
         showError(QString::fromUtf8(error.what()));
     }
 }
 
 void ImageComparePage::setResult(double score, double threshold, int firstWidth,
-                                 int firstHeight, int secondWidth, int secondHeight)
+                                 int firstHeight, int secondWidth, int secondHeight,
+                                 qint64 elapsedMs)
 {
     const bool matched = score >= threshold;
     m_resultVerdict->setText(matched ? tr("判定：相同图片") : tr("判定：不同图片"));
@@ -322,12 +332,13 @@ void ImageComparePage::setResult(double score, double threshold, int firstWidth,
                                        : QStringLiteral("color:#b91c1c;font-size:18px;font-weight:700;"));
     m_resultScore->setText(QStringLiteral("%1%").arg(score * 100.0, 0, 'f', 2));
     m_resultSource->setText(
-        tr("图片一 %1x%2   vs   图片二 %3x%4   阈值 %5")
+        tr("图片一 %1x%2   vs   图片二 %3x%4   阈值 %5   %6")
             .arg(firstWidth)
             .arg(firstHeight)
             .arg(secondWidth)
             .arg(secondHeight)
-            .arg(threshold, 0, 'f', 2));
+            .arg(threshold, 0, 'f', 2)
+            .arg(formatutils::durationLabel(elapsedMs)));
 }
 
 void ImageComparePage::showError(const QString& message)

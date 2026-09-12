@@ -1,5 +1,6 @@
 #include "videocomparepage.h"
 
+#include "formatutils.h"
 #include "parallel_extract.hpp"
 
 #include <opencv2/imgproc.hpp>
@@ -9,6 +10,7 @@
 #include <QCheckBox>
 #include <QDoubleSpinBox>
 #include <QDragEnterEvent>
+#include <QElapsedTimer>
 #include <QDropEvent>
 #include <QFileDialog>
 #include <QFileInfo>
@@ -208,8 +210,12 @@ VideoCompareWorker::VideoCompareWorker(QString firstPath, QString secondPath,
 void VideoCompareWorker::run()
 {
     try {
-        // The video and audio stages overlap. progress() is called from worker
-        // threads, so the update is routed back through the event loop.
+        // The video and audio stages overlap, and progress() is called from
+        // those worker threads, so each update is routed back through the event
+        // loop rather than touching widgets from here.
+        QElapsedTimer extractionTimer;
+        extractionTimer.start();
+
         vividmatch::VideoFingerprint left;
         vividmatch::VideoFingerprint right;
         vividmatch::fingerprintPair(
@@ -223,10 +229,12 @@ void VideoCompareWorker::run()
                     Qt::QueuedConnection);
             });
 
+        const qint64 extractionMs = extractionTimer.elapsed();
+
         emit progress(tr("正在比对..."));
         vividmatch::VideoComparison comparison =
             vividmatch::compareVideoFingerprints(left, right, m_frameThreshold);
-        emit finished(comparison);
+        emit finished(comparison, extractionMs);
     } catch (const std::exception& error) {
         emit failed(QString::fromUtf8(error.what()));
     }
@@ -499,9 +507,10 @@ void VideoComparePage::onWorkerProgress(const QString& message)
     m_progress->setFormat(message);
 }
 
-void VideoComparePage::onCompareFinished(vividmatch::VideoComparison comparison)
+void VideoComparePage::onCompareFinished(vividmatch::VideoComparison comparison,
+                                        qint64 extractionMs)
 {
-    showResult(comparison);
+    showResult(comparison, extractionMs);
 }
 
 void VideoComparePage::onCompareFailed(const QString& message)
@@ -524,7 +533,8 @@ void VideoComparePage::onThreadFinished()
     }
 }
 
-void VideoComparePage::showResult(const vividmatch::VideoComparison& comparison)
+void VideoComparePage::showResult(const vividmatch::VideoComparison& comparison,
+                                  qint64 extractionMs)
 {
     m_verdict->setText(verdictLabel(comparison.verdict));
     m_verdict->setStyleSheet(
@@ -547,6 +557,16 @@ void VideoComparePage::showResult(const vividmatch::VideoComparison& comparison)
                  .arg(comparison.frameThreshold, 0, 'f', 2);
 
     lines << audioLayerNote(comparison.audio);
+
+    // Timing is split by stage. Extraction is normally the bulk of the wait, and
+    // its stage times overlap each other, so it is reported as the wall time the
+    // worker measured rather than as a sum.
+    const qint64 overallMs = extractionMs + static_cast<qint64>(comparison.elapsedMs);
+    lines << tr("用时：合计 %1（提取指纹 %2，比对 %3）")
+                 .arg(formatutils::durationValue(overallMs))
+                 .arg(formatutils::durationValue(extractionMs))
+                 .arg(formatutils::durationValue(static_cast<qint64>(comparison.elapsedMs)));
+
     m_metrics->setText(lines.join(QLatin1Char('\n')));
 }
 

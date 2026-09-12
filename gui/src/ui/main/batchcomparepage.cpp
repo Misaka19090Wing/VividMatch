@@ -1,5 +1,7 @@
 #include "batchcomparepage.h"
 
+#include "formatutils.h"
+
 #include <QAction>
 #include <QApplication>
 #include <QBrush>
@@ -537,13 +539,17 @@ void BatchComparePage::startCompare()
     m_thread->start();
 }
 
-void BatchComparePage::compareFinished(QVector<BatchCluster> clusters)
+void BatchComparePage::compareFinished(QVector<BatchCluster> clusters, qint64 elapsedMs)
 {
     rebuildGroupedTree(std::move(clusters));
     m_compareRecordIds.clear();
     m_progress->setRange(0, 1);
     m_progress->setValue(1);
-    m_progress->setFormat(tr("比对完成"));
+    // The comparison time is part of the completion message, next to the count
+    // of images it covered.
+    m_progress->setFormat(tr("比对完成 · %1 张 · %2")
+                              .arg(m_records.size())
+                              .arg(formatutils::durationLabel(elapsedMs)));
 }
 
 void BatchComparePage::compareFailed(const QString& message)

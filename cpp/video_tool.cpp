@@ -7,7 +7,9 @@
 
 namespace {
 
-void printComparisonDetails(const vividmatch::VideoComparison& comparison) {
+void printComparisonDetails(const vividmatch::VideoComparison& comparison,
+                            const vividmatch::VideoFingerprint& left,
+                            const vividmatch::VideoFingerprint& right) {
     std::cout.setf(std::ios::fixed);
     std::cout << std::setprecision(4);
     std::cout << "samples=" << comparison.leftFrames << " vs " << comparison.rightFrames
@@ -18,6 +20,15 @@ void printComparisonDetails(const vividmatch::VideoComparison& comparison) {
     std::cout << "run_ratio=" << comparison.runRatio << '\n';
     std::cout << "mean_score=" << comparison.meanScore << '\n';
     std::cout << "best_score=" << comparison.bestMatchScore << '\n';
+
+    // Extraction and comparison are reported separately: they have different
+    // cost profiles, and naming both makes a slow run diagnosable.
+    std::cout << std::setprecision(1);
+    std::cout << "time_ms_extract_video=" << left.elapsedMs + right.elapsedMs << '\n';
+    std::cout << "time_ms_extract_audio=" << left.audio.elapsedMs + right.audio.elapsedMs
+              << '\n';
+    std::cout << "time_ms_compare=" << comparison.elapsedMs << '\n';
+    std::cout << std::setprecision(4);
 
     const vividmatch::AudioComparison& audio = comparison.audio;
     std::cout << "audio_available=" << (audio.available ? "true" : "false") << '\n';
@@ -47,7 +58,7 @@ int compareVideos(const std::string& first, const std::string& second, double th
     std::cout << "source=" << left.width << "x" << left.height << " " << left.fps
               << "fps " << left.duration << "s vs " << right.width << "x" << right.height
               << " " << right.fps << "fps " << right.duration << "s\n";
-    printComparisonDetails(comparison);
+    printComparisonDetails(comparison, left, right);
     std::cout << "verdict=" << vividmatch::videoVerdictName(comparison.verdict) << '\n';
 
     if (comparison.verdict != vividmatch::VideoVerdict::Identical) {

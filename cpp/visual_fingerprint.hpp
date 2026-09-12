@@ -27,15 +27,24 @@ struct Fingerprint {
     int height = 0;
 };
 
+// Number of set bits; the Hamming distance between two block hashes is the
+// popcount of their XOR.
 inline int popcount(std::uint64_t value) {
     int count = 0;
     while (value != 0) {
-        value &= value - 1;
+        value &= value - 1;  // clears the lowest set bit
         ++count;
     }
     return count;
 }
 
+// Normalises any supported image to the fixed 64x64 grayscale canvas every
+// fingerprint is taken from. Scaling to one fixed size is what makes the
+// comparison independent of the source resolution.
+//
+// INTER_AREA averages pixels when shrinking, which is the correct filter for
+// downscaling; it degrades when enlarging a very small source, so a source
+// smaller than the canvas is grown with INTER_LINEAR instead.
 inline cv::Mat fingerprintCanvas(const cv::Mat& image) {
     if (image.empty()) {
         throw std::invalid_argument("input image is empty");
@@ -59,6 +68,15 @@ inline cv::Mat fingerprintCanvas(const cv::Mat& image) {
     return canvas;
 }
 
+// Hashes one block of the 64x64 canvas.
+//
+// The block's 2D DCT is taken and the low-frequency 8x8 corner kept: those
+// coefficients carry the block's coarse structure, which is what survives
+// resizing and re-encoding, while the high frequencies are where codec noise
+// lives. Each coefficient is then compared against the median of the 64, giving
+// one bit per coefficient. Using the median (rather than zero) makes the bits
+// invariant to a uniform brightness or contrast change, so a slightly darker
+// re-encode still hashes the same.
 inline std::uint64_t blockHash(const cv::Mat& tile) {
     cv::Mat float_tile;
     tile.convertTo(float_tile, CV_32FC1);
@@ -85,6 +103,13 @@ inline std::uint64_t blockHash(const cv::Mat& tile) {
     return hash;
 }
 
+// Fingerprints one image: normalise to the fixed canvas, then hash each of the
+// 4x4 blocks in reading order (block index = row * kGridSize + column, which is
+// the order compareFingerprints assumes on both sides).
+//
+// The source width and height are recorded for reporting only; they take no
+// part in matching, which is what makes two resolutions of one picture compare
+// equal.
 inline Fingerprint makeFingerprint(const cv::Mat& image) {
     cv::Mat canvas = fingerprintCanvas(image);
     Fingerprint fingerprint;
@@ -106,6 +131,7 @@ inline Fingerprint makeFingerprint(const cv::Mat& image) {
     return fingerprint;
 }
 
+// Convenience wrapper: decode a file, then fingerprint it.
 inline Fingerprint fingerprintFromFile(const std::string& path) {
     cv::Mat image = cv::imread(path, cv::IMREAD_COLOR);
     if (image.empty()) {
@@ -114,6 +140,17 @@ inline Fingerprint fingerprintFromFile(const std::string& path) {
     return makeFingerprint(image);
 }
 
+// Similarity in [0, 1], where 1 means every kept block hashes identically.
+//
+// This is the 抗马赛克 rule from strategy.md: blocks are compared by Hamming
+// distance, the `discard` worst blocks are dropped, and the rest are averaged.
+// Dropping the worst blocks is what lets a watermark, a black bar or a mosaic
+// patch sit over part of the picture without dragging the score down, while a
+// genuinely different picture still differs in most blocks.
+//
+// The score is a fraction of the 64 bits per kept block, so a score is a claim
+// about block hashes, not about pixels: two unrelated but very flat images can
+// share several blocks. Callers pair it with a threshold (0.78 by default).
 inline double compareFingerprints(
     const Fingerprint& left,
     const Fingerprint& right,

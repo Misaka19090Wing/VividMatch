@@ -20,6 +20,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <chrono>
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
@@ -113,6 +114,8 @@ struct AudioFingerprint {
     int sampleRate = kAudioSampleRate;
     double duration = 0.0;
     std::vector<AudioSecondFeature> seconds;
+    // Wall time spent decoding and analysing this track, in milliseconds.
+    double elapsedMs = 0.0;
 };
 
 struct AudioComparison {
@@ -580,9 +583,25 @@ inline AudioSecondFeature analyseSecond(const std::vector<double>& samples,
 }  // namespace detail
 
 // Decodes the audio track of a video and reduces it to one feature per second.
+// Never throws: a missing ffmpeg, a silent clip or an unreadable file all come
+// back as available == false with a reason in `error`, because the audio layer
+// is optional and the visual verdict still stands without it.
 inline AudioFingerprint fingerprintAudio(const std::string& path,
                                          const std::string& ffmpegPath = std::string()) {
     AudioFingerprint fingerprint;
+    const auto started = std::chrono::steady_clock::now();
+
+    // Records the analysis time on every path out, including the early ones.
+    struct Stamp {
+        AudioFingerprint& target;
+        std::chrono::steady_clock::time_point started;
+        ~Stamp() {
+            target.elapsedMs =
+                std::chrono::duration<double, std::milli>(
+                    std::chrono::steady_clock::now() - started)
+                    .count();
+        }
+    } stamp{fingerprint, started};
 
     const std::string ffmpeg = detail::findFfmpeg(ffmpegPath);
     if (ffmpeg.empty()) {

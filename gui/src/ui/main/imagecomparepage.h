@@ -32,13 +32,20 @@ private slots:
     void compareSelectedImages();
 
 private:
+#ifdef VIVIDMATCH_TEST_HOOKS
+    // Only compiled when a test harness asks for it; the file dialog is native
+    // and cannot be driven from an automated run.
+    friend class ImageComparePageTestHook;
+#endif
+
     void chooseImage(int slot);
     void setImagePath(int slot, const QString& path);
     void refreshPreview(int slot);
     void refreshPreviews();
     void showError(const QString& message);
+    // elapsedMs is the measured comparison time, shown alongside the verdict.
     void setResult(double score, double threshold, int firstWidth, int firstHeight,
-                   int secondWidth, int secondHeight);
+                   int secondWidth, int secondHeight, qint64 elapsedMs);
 
 private:
     QString m_firstPath;

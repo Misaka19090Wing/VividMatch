@@ -5,6 +5,7 @@
 #include "visual_fingerprint.hpp"
 
 #include <QFile>
+#include <QElapsedTimer>
 
 #include <algorithm>
 #include <numeric>
@@ -54,6 +55,11 @@ BatchCompareWorker::BatchCompareWorker(const QVector<QString>& paths, double thr
 
 void BatchCompareWorker::run()
 {
+    // Measured inside the worker so the reported time covers the actual work:
+    // decoding, fingerprinting and the pairwise comparison.
+    QElapsedTimer timer;
+    timer.start();
+
     const int count = m_paths.size();
     const long long pairCount = count > 1 ? (static_cast<long long>(count) * (count - 1)) / 2 : 0;
     const long long total = count + pairCount;
@@ -129,5 +135,5 @@ void BatchCompareWorker::run()
               });
 
     emit progressChanged(static_cast<int>(total), static_cast<int>(total));
-    emit finished(clusters);
+    emit finished(clusters, timer.elapsed());
 }

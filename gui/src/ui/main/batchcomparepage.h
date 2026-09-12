@@ -86,10 +86,6 @@ private:
         Compare,
     };
 
-    // Test-only hook: lets the automated harness load rows and drive column
-    // resizes without going through the file dialogs.
-    friend class BatchComparePageTestHook;
-
     struct SortRule {
         int column = NameColumn;
         Qt::SortOrder order = Qt::AscendingOrder;
@@ -119,7 +115,7 @@ private slots:
     void removeChecked();
     void deleteCheckedFiles();
     void startCompare();
-    void compareFinished(QVector<BatchCluster> clusters);
+    void compareFinished(QVector<BatchCluster> clusters, qint64 elapsedMs);
     void compareFailed(const QString& message);
     void onProgressChanged(int done, int total);
     void onCompareThreadFinished();
@@ -133,6 +129,12 @@ private slots:
     void searchChanged(const QString& text);
 
 private:
+#ifdef VIVIDMATCH_TEST_HOOKS
+    // Only compiled when a test harness asks for it; the file dialog is native
+    // and cannot be driven from an automated run.
+    friend class BatchComparePageTestHook;
+#endif
+
     void addImagePaths(const QStringList& paths);
     bool addImagePath(const QString& path, int& recordId);
     void updateThumbnails();

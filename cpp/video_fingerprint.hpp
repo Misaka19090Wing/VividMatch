@@ -19,6 +19,7 @@
 #include <opencv2/videoio.hpp>
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <cstdint>
 #include <numeric>
@@ -63,6 +64,8 @@ struct VideoFingerprint {
     int width = 0;
     int height = 0;
     std::int64_t totalFrames = 0;
+    // Wall time spent decoding and hashing this clip, in milliseconds.
+    double elapsedMs = 0.0;
 };
 
 enum class VideoVerdict {
@@ -124,6 +127,15 @@ struct VideoComparison {
     // Audio layer result (strategy.md's 视听融合矩阵 inputs).
     AudioComparison audio;
     VideoVerdict verdict = VideoVerdict::Different;
+    // Timing, so a caller can show how long each stage took. The per-file
+    // extraction times are copied from the fingerprints the comparison was
+    // given; the comparison itself is measured here. Note that these stage
+    // times are each measured on their own, and extraction runs the video and
+    // audio stages concurrently, so they intentionally add up to more than the
+    // wall time.
+    double leftElapsedMs = 0.0;   // decoding and hashing the first clip
+    double rightElapsedMs = 0.0;  // decoding and hashing the second clip
+    double elapsedMs = 0.0;       // this comparison stage alone
 };
 
 // Longest strictly increasing subsequence length over the second coordinate of
@@ -190,6 +202,7 @@ inline VideoFingerprint fingerprintVideo(
     if (samplesPerSecond <= 0.0) {
         throw std::invalid_argument("samplesPerSecond must be positive");
     }
+    const auto started = std::chrono::steady_clock::now();
 
     cv::VideoCapture capture(path, cv::CAP_FFMPEG);
     if (!capture.isOpened()) {
@@ -280,6 +293,9 @@ inline VideoFingerprint fingerprintVideo(
                          : (video.totalFrames > 0 ? video.totalFrames / video.fps : 0.0);
 
     capture.release();
+    video.elapsedMs =
+        std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - started)
+            .count();
     return video;
 }
 
@@ -288,11 +304,27 @@ inline VideoComparison compareVideoFingerprints(
     const VideoFingerprint& right,
     double frameThreshold = kDefaultFrameThreshold,
     double audioThreshold = kDefaultAudioThreshold) {
+    const auto started = std::chrono::steady_clock::now();
     VideoComparison result;
     result.leftFrames = static_cast<int>(left.frames.size());
     result.rightFrames = static_cast<int>(right.frames.size());
     result.shorterFrames = std::min(result.leftFrames, result.rightFrames);
     result.frameThreshold = frameThreshold;
+    result.leftElapsedMs = left.elapsedMs;
+    result.rightElapsedMs = right.elapsedMs;
+
+    // Records the comparison time on every path out of this function, so the
+    // early returns below cannot forget it.
+    struct Stamp {
+        VideoComparison& target;
+        std::chrono::steady_clock::time_point started;
+        ~Stamp() {
+            target.elapsedMs =
+                std::chrono::duration<double, std::milli>(
+                    std::chrono::steady_clock::now() - started)
+                    .count();
+        }
+    } stamp{result, started};
 
     if (result.leftFrames == 0 || result.rightFrames == 0) {
         return result;

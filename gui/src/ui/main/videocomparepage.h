@@ -35,7 +35,9 @@ public slots:
 
 signals:
     void progress(const QString& message);
-    void finished(vividmatch::VideoComparison comparison);
+    // elapsedMs is the wall time the two extraction stages took together; the
+    // comparison carries its own timing for the stage after them.
+    void finished(vividmatch::VideoComparison comparison, qint64 elapsedMs);
     void failed(const QString& message);
 
 private:
@@ -66,7 +68,7 @@ private slots:
     void chooseSecondVideo();
     void startCompare();
     void onWorkerProgress(const QString& message);
-    void onCompareFinished(vividmatch::VideoComparison comparison);
+    void onCompareFinished(vividmatch::VideoComparison comparison, qint64 extractionMs);
     void onCompareFailed(const QString& message);
     void onThreadFinished();
 
@@ -84,7 +86,7 @@ private:
     void refreshPreview(int slot);
     void refreshPreviews();
     void resetResult();
-    void showResult(const vividmatch::VideoComparison& comparison);
+    void showResult(const vividmatch::VideoComparison& comparison, qint64 extractionMs);
     void setBusy(bool busy);
 
     QLabel* m_firstPreview;

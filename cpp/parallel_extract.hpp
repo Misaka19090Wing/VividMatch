@@ -19,6 +19,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <chrono>
 #include <cstddef>
 #include <functional>
 #include <thread>
@@ -80,10 +81,12 @@ inline void fingerprintPair(
     VideoFingerprint& second,
     bool includeAudio = true,
     const std::string& ffmpegPath = std::string(),
-    const std::function<void(const std::string&)>& progress = {}) {
+    const std::function<void(const std::string&)>& progress = {},
+    double* elapsedMs = nullptr) {
     const std::vector<std::string> paths{firstPath, secondPath};
     VideoFingerprint videos[2];
     AudioFingerprint audio[2];
+    const auto started = std::chrono::steady_clock::now();
 
     auto notify = [&progress](const std::string& message) {
         if (progress) {
@@ -133,9 +136,21 @@ inline void fingerprintPair(
     }
     first = std::move(videos[0]);
     second = std::move(videos[1]);
+
+    // True wall time of the extraction stages. The per-fingerprint times are
+    // each measured on their own and overlap, so this is the number to show as
+    // "how long the extraction took".
+    if (elapsedMs != nullptr) {
+        *elapsedMs =
+            std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now()
+                                                      - started)
+                .count();
+    }
 }
 
-// One-call form: fingerprint both files concurrently, then compare them.
+// One-call form: fingerprint both files concurrently, then compare them. The
+// caller measures extraction itself when it needs that split, because the
+// comparison result carries only the stages it observed.
 inline VideoComparison compareVideoFiles(
     const std::string& leftPath,
     const std::string& rightPath,
