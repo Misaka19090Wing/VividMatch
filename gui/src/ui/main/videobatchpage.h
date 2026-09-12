@@ -2,6 +2,7 @@
 #define VIDEOBATCHPAGE_H
 
 #include <QDateTime>
+#include <QHash>
 #include <QMetaType>
 #include <QObject>
 #include <QPointer>
@@ -14,11 +15,30 @@
 
 class QComboBox;
 class QLabel;
+class QLineEdit;
 class QProgressBar;
 class QPushButton;
 class QThread;
 class QTreeWidget;
 class QTreeWidgetItem;
+
+// How the winner of a duplicate group is chosen. Declared outside the page so
+// the worker can carry it by value: reading it off the page from the worker
+// thread would be a race against the combo box.
+enum class KeepPolicy {
+    HighestResolution = 0,
+    LowestResolution,
+    LargestFile,
+    SmallestFile,
+    NewestModified,
+    OldestModified,
+    KeepAll,
+};
+
+// Ranks a group under `policy`, returning the index to keep or -1 for "keep
+// everything". Free of page state so it is safe to call from a worker thread.
+int rankVideoGroup(KeepPolicy policy, const std::vector<int>& members,
+                   const std::vector<vividmatch::VideoBatchItem>& items);
 
 // One row of the batch result, flattened for the list. `row` is the index into
 // the batch's item vector, which is how a row maps back to its clip.
@@ -32,6 +52,7 @@ struct VideoBatchRow {
     QString modifiedText;
     int width = 0;
     int height = 0;
+    double duration = 0.0;
     qint64 fileSize = 0;
     QDateTime modified;
     bool preferred = false;
@@ -58,24 +79,6 @@ struct VideoBatchOutcome {
 };
 
 Q_DECLARE_METATYPE(VideoBatchOutcome)
-
-// How the winner of a duplicate group is chosen. Declared outside the page so
-// the worker can carry it by value: reading it off the page from the worker
-// thread would be a race against the combo box.
-enum class KeepPolicy {
-    HighestResolution = 0,
-    LowestResolution,
-    LargestFile,
-    SmallestFile,
-    NewestModified,
-    OldestModified,
-    KeepAll,
-};
-
-// Ranks a group under `policy`, returning the index to keep or -1 for "keep
-// everything". Free of page state so it is safe to call from a worker thread.
-int rankVideoGroup(KeepPolicy policy, const std::vector<int>& members,
-                   const std::vector<vividmatch::VideoBatchItem>& items);
 
 // Fingerprints and groups a folder of clips off the UI thread. Each clip is
 // decoded once; the comparing stage is a small fraction of the time.
@@ -120,11 +123,20 @@ private slots:
     void chooseFolder();
     void chooseVideos();
     void clearList();
+    void invertChecked();
+    void removeChecked();
+    void deleteCheckedFiles();
+    void selectAllChecked();
     void startCompare();
     void onWorkerProgress(int done, int total, const QString& stage);
     void onCompareFinished(VideoBatchOutcome outcome);
     void onCompareFailed(const QString& message);
     void onThreadFinished();
+    void onItemChanged(QTreeWidgetItem* item, int column);
+    void onItemDoubleClicked(QTreeWidgetItem* item, int column);
+    void showTreeContextMenu(const QPoint& position);
+    void showGroupContextMenu(QTreeWidgetItem* group, const QPoint& position);
+    void searchChanged(const QString& text);
 
 private:
 #ifdef VIVIDMATCH_TEST_HOOKS
@@ -133,29 +145,79 @@ private:
     friend class VideoBatchPageTestHook;
 #endif
 
+    // Columns of the list.
+    enum Column {
+        CheckColumn = 0,
+        NameColumn,
+        ResolutionColumn,
+        DurationColumn,
+        SizeColumn,
+        ModifiedColumn,
+        ColumnCount,
+    };
+
+    // A clip in the list. Rows are created as soon as a clip is added, so the
+    // list is never empty while a comparison is pending.
+    struct RowData {
+        int id = -1;
+        QString path;
+        QString name;
+        qint64 fileSize = 0;
+        QDateTime modified;
+        QString modifiedText;
+        // Filled in by the comparison; a dash is shown until then because these
+        // two need the clip to be read.
+        bool measured = false;
+        int width = 0;
+        int height = 0;
+        double duration = 0.0;
+    };
+
     void addPaths(const QStringList& paths);
-    // Shows clips that are not in the list yet, under a heading that says
-    // whether they are waiting or were added after a comparison. Name, size and
-    // date come straight from the filesystem; resolution and duration only exist
-    // once fingerprinting has read the clip, so those columns show a dash until
-    // the next comparison fills them in. Reading every clip's header up front
-    // would stall the window on a large drop.
-    void rebuildPendingTree();
+    // Rebuilds the result groups from an outcome.
     void rebuildTree(const VideoBatchOutcome& outcome);
+    // Rebuilds only the clips that are not shown yet, leaving result groups in
+    // place, so adding clips extends the list instead of wiping results.
+    void rebuildPendingTree();
+    QTreeWidgetItem* createRowItem(int recordId) const;
+    QTreeWidgetItem* ensurePendingGroup();
+    void refreshGroupLabels();
     int unlistedPathCount() const;
+    void applyPolicyToChecks();
+    QVector<QTreeWidgetItem*> allRowItems() const;
+    QVector<QTreeWidgetItem*> checkedItems() const;
+    QVector<QTreeWidgetItem*> selectedRowItems() const;
+    QVector<QTreeWidgetItem*> contextTargetItems(QTreeWidgetItem* clicked) const;
+    void removeItems(const QVector<QTreeWidgetItem*>& items);
+    void setItemsChecked(const QVector<QTreeWidgetItem*>& items, bool checked);
+    void deleteFiles(const QVector<QTreeWidgetItem*>& items);
+    void showProperties(const QVector<QTreeWidgetItem*>& items);
+    void copyPaths(const QVector<QTreeWidgetItem*>& items);
+    void openContainingFolder(const QVector<QTreeWidgetItem*>& items);
+    const RowData* recordForItem(const QTreeWidgetItem* item) const;
+    RowData* recordForItem(QTreeWidgetItem* item);
+    // Record id whose path matches, or -1. Used to keep rows stable across
+    // rebuilds, since the comparison reports clips by path.
+    int recordIdForPath(const QString& path) const;
     void updateStatus();
     void setBusy(bool busy);
     KeepPolicy currentPolicy() const;
 
     QTreeWidget* m_tree;
     QComboBox* m_policy;
+    QLineEdit* m_search;
     QProgressBar* m_progress;
     QPushButton* m_compareButton;
     QPushButton* m_clearButton;
+    QPushButton* m_invertButton;
+    QPushButton* m_selectAllButton;
+    QPushButton* m_removeButton;
+    QPushButton* m_deleteButton;
     QLabel* m_status;
 
-    QStringList m_paths;
+    QHash<int, RowData> m_records;
     QStringList m_listedPaths;  // clips already shown in the tree
+    int m_nextRecordId;
     int m_lastClipCount;
     int m_lastDuplicateGroups;
     int m_lastFailedCount;
