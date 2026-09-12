@@ -28,8 +28,8 @@ separable so each can be reasoned about and tested on its own:
 
 | layer | what it does | why |
 | --- | --- | --- |
-| visual | block-DCT hash per frame, worst blocks discarded | resolution- and bitrate-robust, and tolerant of a watermark, a logo or a mosaic patch over part of the picture (抗马赛克) |
-| temporal | one fingerprint per second, matched positions must advance monotonically | catches 混剪: a spliced video matches individual frames but jumps around on the timeline |
+| visual | block-DCT hash per frame, worst blocks discarded | resolution- and bitrate-robust, and tolerant of a watermark, a logo or a mosaic patch over part of the picture |
+| temporal | one fingerprint per second, matched positions must advance monotonically | catches a spliced video: it matches individual frames but jumps around on the timeline |
 | audio | RMS energy, spectral centroid and 16 band energies per second | resolution-independent, and the tie-breaker when the picture is heavily obscured |
 
 A frame-level decision table combines them: pictures matching with the
@@ -103,7 +103,7 @@ The verdicts, restricted to the cases this implementation can tell apart:
 | --- | --- |
 | `identical` | the shorter video is matched by one monotonic chain and the soundtrack agrees: same content, only resolution / codec / bitrate differ. Also returned when the picture matches poorly but the sound matches well (the "audio veto" case for a heavily obscured picture) |
 | `reencoded` | the picture matches but the soundtrack does not: the same picture with a replaced music bed |
-| `montage` | matches exist but cannot all sit on one monotonic chain (混剪 splicing or a rewind) |
+| `montage` | matches exist but cannot all sit on one monotonic chain (splicing or a rewind) |
 | `partial` | the matched part is in order but does not cover the shorter video |
 | `different` | no sampled frame matched |
 
@@ -128,8 +128,9 @@ stays the only library dependency.
 
 ### When the audio layer sits out
 
-Both the CLI (`audio_skipped=`) and the GUI (`音频：未参与（...）`) name the reason,
-so it is clear whether anything needs fixing:
+Both the CLI (`audio_skipped=`) and the GUI (`Audio: not used (...)` in English, or
+the equivalent in Chinese) name the reason, so it is clear whether anything needs
+fixing:
 
 | message | cause | what to do |
 | --- | --- | --- |
@@ -149,12 +150,12 @@ comparison mode from a function-selection page. There are four:
 
 | mode | what it does |
 | --- | --- |
-| 图片比对 (image) | pick two images, see the similarity result |
-| 批量图片比对 (batch image) | add a folder, several files or a drag-and-drop; results are grouped by similarity in collapsible Explorer-style groups, and each duplicate group keeps only the selected best image checked |
-| 视频比对 (video) | pick two clips and compare picture, timing and sound |
-| 批量视频比对 (batch video) | add a folder of clips, group the ones that are the same video, and pick one to keep per group |
+| Image comparison | pick two images, see the similarity result |
+| Batch image comparison | add a folder, several files or a drag-and-drop; results are grouped by similarity in collapsible Explorer-style groups, and each duplicate group keeps only the selected best image checked |
+| Video comparison | pick two clips and compare picture, timing and sound |
+| Batch video comparison | add a folder of clips, group the ones that are the same video, and pick one to keep per group |
 
-All four are also listed in the 文件 (File) menu.
+All four are also listed in the **File** menu.
 
 ### Language
 
@@ -165,9 +166,9 @@ deliberate: if the `.qm` is missing or cannot be loaded the application stays in
 English rather than falling back to Chinese, which a reader may not know.
 
 On first run the language follows the operating system (`QLocale::system()`); a
-`zh*` system gets Chinese, everything else English. **文件 → 语言 / File →
-Language** overrides it with *Follow the system*, *English* or *Simplified
-Chinese*, and the choice is remembered in `QSettings`.
+`zh*` system gets Chinese, everything else English. **File → Language** overrides
+it with *Follow the system*, *English* or *Simplified Chinese*, and the choice is
+remembered in `QSettings`.
 
 The new language takes effect on the **next start**: switching shows a notice
 saying so. Every page does implement `changeEvent()` and rebuilds its own strings

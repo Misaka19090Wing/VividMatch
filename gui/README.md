@@ -15,7 +15,7 @@ Qt 6 Widgets desktop GUI, based on the window/page structure and CMake layout
 of [XMuli/myapp-template](https://github.com/XMuli/myapp-template) (MIT).
 
 The GUI opens on a function-selection home page offering four comparison modes,
-all four of which are also listed in the 文件 (File) menu.
+all four of which are also listed in the **File** menu.
 
 ## Language
 
@@ -24,7 +24,7 @@ code are English and the Chinese text lives in `../i18n/vividmatch_zh_CN.qm`; if
 that file is missing the interface stays English, which is why it is the source.
 
 - On first run the language follows the operating system's UI language.
-- **文件 → 语言 / File → Language** offers *Follow the system*, *English* and
+- **File → Language** offers *Follow the system*, *English* and
   *Simplified Chinese*; the choice is stored with `QSettings`, and a notice says it
   takes effect on the next start.
 - Every page implements `changeEvent()` and rebuilds its own strings on a
@@ -74,12 +74,13 @@ Batch list controls:
   open every image in the group, open its folder, remove the group, remove or
   delete just the checked images, and start the comparison.
 - Drag a column edge to resize it. The checkbox indicator stays left-aligned at
-  the start of the 选中 cell, so it never drifts into the middle of a widened
+  the start of the Selected cell, so it never drifts into the middle of a widened
   column; the column can shrink until the checkbox just fits and stops there,
   and the group/child tree indent is kept small so almost no space is wasted to
-  its left. Widening 缩略图 scales the thumbnails up (each keeps its own aspect
-  ratio) while that row's height grows with them, so no thumbnail is clipped.
-  Group header rows keep their own height and never grow with the thumbnails.
+  its left. Widening the Thumbnail column scales the thumbnails up (each keeps its
+  own aspect ratio) while that row's height grows with them, so no thumbnail is
+  clipped. Group header rows keep their own height and never grow with the
+  thumbnails.
 
 ## Video mode
 
@@ -106,8 +107,8 @@ everything. Each clip is decoded once on a thread pool, a compact signature
 prefilters the pairs, and audio is extracted only for the clips that matched
 visually, so a folder of long clips stays practical.
 
-It follows the batch image page: a 选中 checkbox column, a 画面 preview column, a
-right-click menu on both clips and groups, a Ctrl+F locator, and the same
+It follows the batch image page: a Selected checkbox column, a Frame preview
+column, a right-click menu on both clips and groups, a Ctrl+F locator, and the same
 select-all / invert / remove-checked / delete-checked actions.
 
 Behaviour worth knowing:
@@ -115,15 +116,15 @@ Behaviour worth knowing:
 - Clips appear in the list the moment they are added. Resolution and duration
   show as a dash until the background probe has opened the clip, which supplies
   both along with the preview frame; a comparison is not needed for them.
-- The 截帧位置 spin box sets how far into each clip the preview is taken (default
-  50%, the middle, because the first frame is often a title card or a fade from
-  black). It applies on 重新截帧 rather than on every keystroke, since each grab
-  seeks and decodes.
-- The preview scales with the 画面 column width and the row height follows it, the
+- The Frame position spin box sets how far into each clip the preview is taken
+  (default 50%, the middle, because the first frame is often a title card or a fade
+  from black). It applies on **Re-grab frames** rather than on every keystroke,
+  since each grab seeks and decodes.
+- The preview scales with the Frame column width and the row height follows it, the
   same way thumbnails behave on the batch image page.
-- 开始比对 follows the ticks, not the list length: it is enabled only while at
-  least two clips are checked, and the clips it compares are exactly the checked
-  ones. Unchecking everything disables it rather than quietly re-running the
+- **Start comparison** follows the ticks, not the list length: it is enabled only
+  while at least two clips are checked, and the clips it compares are exactly the
+  checked ones. Unchecking everything disables it rather than quietly re-running the
   whole list.
 - Results are replaced by each run, but clips that did not take part (unchecked,
   or added afterwards) stay listed under a waiting group instead of disappearing.
