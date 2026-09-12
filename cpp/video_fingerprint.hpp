@@ -176,6 +176,13 @@ inline std::vector<int> longestIncreasingRun(const std::vector<std::pair<int, in
 // with grab(): OpenCV still decodes them, but it skips the colour conversion
 // and the copy into a cv::Mat, which is most of the work we would otherwise do
 // on frames we are about to discard.
+//
+// Hardware decoding was measured and deliberately not used. This OpenCV build
+// reports FFMPEG (prebuilt) plus Media Foundation with DXVA, but MSMF and
+// DirectShow cannot open MP4 at all here, and asking the FFMPEG backend for
+// CAP_PROP_HW_ACCELERATION (ANY or D3D11) makes reading a 60s 720p clip about
+// twice as slow as software. Decoding this clip is also not the bottleneck: the
+// raw decoder runs it in well under the time the rest of the pipeline takes.
 inline VideoFingerprint fingerprintVideo(
     const std::string& path,
     double samplesPerSecond = kDefaultSamplesPerSecond,
