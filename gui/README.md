@@ -1,51 +1,39 @@
 # VividMatch GUI
 
+**English** | [简体中文](README.zh-CN.md)
+
+> [!WARNING]
+> **This project was built with DeepSeek AI.**
+>
+> The code, tests and documentation here were written with the assistance of
+> DeepSeek AI. Treat it as machine-assisted work and review it yourself before
+> relying on it. Behaviour that is easy to get wrong (column resizing, the
+> enabled state of buttons, when rows are rebuilt) is called out below so it can
+> be checked rather than assumed.
+
 Qt 6 Widgets desktop GUI, based on the window/page structure and CMake layout
 of [XMuli/myapp-template](https://github.com/XMuli/myapp-template) (MIT).
 
-The GUI exposes a function-selection home page. Selecting image-compare mode
-opens a page where the user chooses two image files and runs the OpenCV DCT
-fingerprint comparison from `../cpp/visual_fingerprint.hpp`.
+The GUI opens on a function-selection home page offering four comparison modes,
+all four of which are also listed in the 文件 (File) menu.
+
+## Image mode
+
+Selecting image-compare mode opens a page where the user chooses two image files
+and runs the OpenCV DCT fingerprint comparison from
+`../cpp/visual_fingerprint.hpp`.
 
 Images can be selected with the buttons or dragged from the file manager and
 dropped onto the matching preview panel.
+
+## Batch image mode
 
 Batch mode accepts a whole folder, multiple image files, or drag-and-drop.
 Every row shows a thumbnail, file name, resolution, type, size, modification
 date, path and bit depth. After comparison, duplicate groups are ordered by
 similarity at the top; the selection policy decides which image of each group
-stays checked (default: highest resolution). "不取消勾选" keeps every image in
-a duplicate group checked.
-
-Video mode picks two clips and runs the visual, temporal and audio layers from
-`../cpp/video_fingerprint.hpp` / `../cpp/audio_fingerprint.hpp` on a worker
-thread, showing a poster frame and the resolution / frame rate / duration of
-each clip. Fingerprinting itself is concurrent (`../cpp/parallel_extract.hpp`):
-the audio stage overlaps the video decode and the two clips decode in parallel,
-so the wait is the longest single clip rather than the sum of all four stages.
-The result panel reports the verdict plus the numbers behind it:
-sampled and matched frames, the monotonic chain length, coverage, chain
-completeness, mean frame similarity, and the audio similarity over the aligned
-seconds. The frame-match threshold is adjustable and the audio layer can be
-switched off. The audio layer needs the `ffmpeg` command line on `PATH`; without
-it the verdict falls back to the visual/temporal result.
-
-Batch video mode adds a folder, several clips or a drag-and-drop, then groups the
-clips that are the same video (`../cpp/video_batch.hpp`) and marks the one to
-keep with a star. The keep policy comes from a combo box: highest or lowest
-resolution, largest or smallest file, newest or oldest modification date, or keep
-everything. Each clip is decoded once on a thread pool, a compact signature
-prefilters the pairs, and audio is extracted only for the clips that matched
-visually, so a folder of long clips stays practical.
-
-Like the batch image page, it has a 选中 checkbox column, a 画面 preview column, a
-right-click menu on both clips and groups, a Ctrl+F locator, and 全选 / 反选 /
-移出勾选项 / 删除勾选文件. The preview frame is grabbed in the background and scales
-with the column width, taking the row height with it. The 截帧位置 spin box sets how
-far into each clip the frame is taken (default 50%, the middle, because the first
-frame is often a title card); changing it applies on 重新截帧. The 开始比对 button
-follows the ticks: it is enabled only while at least two clips are checked, so
-unchecking everything disables it rather than re-running the whole list.
+stays checked (default: highest resolution). The "keep everything" policy keeps
+every image in a duplicate group checked.
 
 Batch list controls:
 
@@ -68,6 +56,53 @@ Batch list controls:
   its left. Widening 缩略图 scales the thumbnails up (each keeps its own aspect
   ratio) while that row's height grows with them, so no thumbnail is clipped.
   Group header rows keep their own height and never grow with the thumbnails.
+
+## Video mode
+
+Video mode picks two clips and runs the visual, temporal and audio layers from
+`../cpp/video_fingerprint.hpp` / `../cpp/audio_fingerprint.hpp` on a worker
+thread, showing a poster frame and the resolution / frame rate / duration of
+each clip. Fingerprinting itself is concurrent (`../cpp/parallel_extract.hpp`):
+the audio stage overlaps the video decode and the two clips decode in parallel,
+so the wait is the longest single clip rather than the sum of all four stages.
+The result panel reports the verdict plus the numbers behind it: sampled and
+matched frames, the monotonic chain length, coverage, chain completeness, mean
+frame similarity, and the audio similarity over the aligned seconds. The
+frame-match threshold is adjustable and the audio layer can be switched off. The
+audio layer needs the `ffmpeg` command line on `PATH`; without it the verdict
+falls back to the visual/temporal result.
+
+## Batch video mode
+
+Batch video mode adds a folder, several clips or a drag-and-drop, then groups the
+clips that are the same video (`../cpp/video_batch.hpp`) and marks the one to
+keep with a star. The keep policy comes from a combo box: highest or lowest
+resolution, largest or smallest file, newest or oldest modification date, or keep
+everything. Each clip is decoded once on a thread pool, a compact signature
+prefilters the pairs, and audio is extracted only for the clips that matched
+visually, so a folder of long clips stays practical.
+
+It follows the batch image page: a 选中 checkbox column, a 画面 preview column, a
+right-click menu on both clips and groups, a Ctrl+F locator, and the same
+select-all / invert / remove-checked / delete-checked actions.
+
+Behaviour worth knowing:
+
+- Clips appear in the list the moment they are added. Resolution and duration
+  show as a dash until the background probe has opened the clip, which supplies
+  both along with the preview frame; a comparison is not needed for them.
+- The 截帧位置 spin box sets how far into each clip the preview is taken (default
+  50%, the middle, because the first frame is often a title card or a fade from
+  black). It applies on 重新截帧 rather than on every keystroke, since each grab
+  seeks and decodes.
+- The preview scales with the 画面 column width and the row height follows it, the
+  same way thumbnails behave on the batch image page.
+- 开始比对 follows the ticks, not the list length: it is enabled only while at
+  least two clips are checked, and the clips it compares are exactly the checked
+  ones. Unchecking everything disables it rather than quietly re-running the
+  whole list.
+- Results are replaced by each run, but clips that did not take part (unchecked,
+  or added afterwards) stay listed under a waiting group instead of disappearing.
 
 Build:
 
@@ -111,6 +146,3 @@ If CMake is not on `PATH`, the scripts fall back to `python -m cmake`.
 In Visual Studio Code, register the installed Qt root with
 `Qt: Register Qt installation`, then configure `gui/CMakeLists.txt` with CMake
 Tools.
-
-In Visual Studio Code, run `Qt: Register Qt installation` and point it at the
-Qt directory above, then use CMake Tools to configure `gui/CMakeLists.txt`.

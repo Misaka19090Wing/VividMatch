@@ -1,7 +1,7 @@
 #ifndef VIVIDMATCH_VIDEO_FINGERPRINT_HPP
 #define VIVIDMATCH_VIDEO_FINGERPRINT_HPP
 
-// Visual and temporal layers of strategy.md for video.
+// Visual and temporal layers of the video comparison.
 //
 // A video is reduced to a short sequence of per-second visual fingerprints.
 // Two videos are then compared by matching those sequences frame by frame and
@@ -9,9 +9,9 @@
 // different resolution matches in order, while a spliced (混剪) video matches
 // individual frames but jumps around on the timeline.
 //
-// The audio layer described in strategy.md is deliberately not part of this
-// header; it stays a separate concern so the visual/temporal verdict can be
-// reasoned about (and tested) on its own.
+// The audio layer is deliberately not part of this header; it stays a separate
+// concern so the visual/temporal verdict can be reasoned about (and tested) on
+// its own.
 
 #include "visual_fingerprint.hpp"
 #include "audio_fingerprint.hpp"
@@ -29,7 +29,8 @@
 
 namespace vividmatch {
 
-// Frames sampled per second of video, per strategy.md ("每秒1帧").
+// Frames sampled per second of video ("每秒1帧"). This also sets the cost of a
+// comparison, which grows with the square of the clip length.
 inline constexpr double kDefaultSamplesPerSecond = 1.0;
 // Per-frame similarity above which two sampled frames count as the same moment.
 inline constexpr double kDefaultFrameThreshold = 0.78;
@@ -124,7 +125,8 @@ struct VideoComparison {
     // indices in chain order. The audio layer reuses it, so both layers judge
     // the same time correspondence.
     std::vector<std::pair<int, int>> alignment;
-    // Audio layer result (strategy.md's 视听融合矩阵 inputs).
+    // Audio layer result: what the soundtrack comparison found over the aligned
+    // seconds.
     AudioComparison audio;
     VideoVerdict verdict = VideoVerdict::Different;
     // Timing, so a caller can show how long each stage took. The per-file
@@ -459,8 +461,8 @@ inline VideoComparison compareVideoFingerprints(
         return result;
     }
     if (!samePictures && result.audio.available && result.audio.sameSoundtrack) {
-        // 画面匹配低 + 音频匹配高: strategy.md's "audio veto" case, where the
-        // picture is heavily obscured but the sound gives it away.
+        // 画面匹配低 + 音频匹配高: the "audio veto" case, where the picture is
+        // heavily obscured but the sound gives it away.
         result.verdict = VideoVerdict::Identical;
         return result;
     }

@@ -1,5 +1,16 @@
 # VividMatch
 
+**English** | [简体中文](README.zh-CN.md)
+
+> [!WARNING]
+> **This project was built with DeepSeek AI.**
+>
+> The code, tests and documentation here were written with the assistance of
+> DeepSeek AI. Treat it as machine-assisted work: review it yourself before
+> relying on it for anything that matters. The algorithm and its measured
+> numbers are documented below so the behaviour can be checked rather than
+> taken on trust.
+
 VividMatch checks whether pictures or videos are visually the same across
 different resolutions.
 
@@ -10,8 +21,22 @@ grid of 16 blocks, and each block is fingerprinted with a 2D DCT hash (64 bits
 from the low-frequency coefficients). When two images are compared, the four
 blocks with the largest Hamming distance are discarded and the remaining
 twelve blocks are averaged. The resulting score is in `[0, 1]`, with `1`
-meaning visually identical. This implements the visual fingerprint described
-in `strategy.md`.
+meaning visually identical.
+
+That is the visual layer. The design has three, and they are deliberately
+separable so each can be reasoned about and tested on its own:
+
+| layer | what it does | why |
+| --- | --- | --- |
+| visual | block-DCT hash per frame, worst blocks discarded | resolution- and bitrate-robust, and tolerant of a watermark, a logo or a mosaic patch over part of the picture (抗马赛克) |
+| temporal | one fingerprint per second, matched positions must advance monotonically | catches 混剪: a spliced video matches individual frames but jumps around on the timeline |
+| audio | RMS energy, spectral centroid and 16 band energies per second | resolution-independent, and the tie-breaker when the picture is heavily obscured |
+
+A frame-level decision table combines them: pictures matching with the
+soundtrack agreeing is the same video; pictures matching with the soundtrack
+replaced is a re-cut; and a picture that matches poorly while the sound matches
+well is still the same video, because the picture was probably obscured (the
+"audio veto").
 
 ## C++ implementation (OpenCV 5)
 
@@ -29,10 +54,10 @@ threshold is `0.78`.
 
 ### Video comparison
 
-`cpp/video_fingerprint.hpp` and `cpp/audio_fingerprint.hpp` implement the visual,
-temporal and audio layers of `strategy.md`. A video is reduced to one visual
-fingerprint per second (the same block-DCT hash used for images); two videos are
-matched frame by frame; the 时间轴单调性校验 runs on those matches; and the
+`cpp/video_fingerprint.hpp` and `cpp/audio_fingerprint.hpp` implement the
+visual, temporal and audio layers. A video is reduced to one visual fingerprint
+per second (the same block-DCT hash used for images); two videos are matched
+frame by frame; the monotonicity check runs on those matches; and the
 soundtrack is compared only over the seconds that aligned visually:
 
 ```bash
@@ -60,10 +85,10 @@ The design follows where the time actually goes, measured on real clips:
   on a thread pool.
 - **Comparing every pair still grows quadratically**, in both the clip count and
   the clip length (sampling is once per second, so an hour-long clip is ~3600
-  samples). A 128-byte per-clip signature — the majority vote of each sampled
-  frame's block bits — is compared first, and only pairs above
+  samples). A 128-byte per-clip signature - the majority vote of each sampled
+  frame's block bits - is compared first, and only pairs above
   `kDefaultSignatureThreshold` get the full comparison. Measured separation:
-  same content 0.97–1.00, different content 0.63–0.70, so the threshold sits in
+  same content 0.97-1.00, different content 0.63-0.70, so the threshold sits in
   the gap and drops nothing real.
 - **Audio is extracted lazily**, only for clips that take part in a visually
   matching pair, because it costs a separate ffmpeg process per clip.
@@ -72,14 +97,13 @@ A `partial` verdict deliberately does not merge a group: a shared opening or a
 clip cut from a longer video is not the same video. `identical` and `reencoded`
 both merge, since the latter is the same picture with the soundtrack swapped.
 
-The verdict is the 视听融合矩阵 from `strategy.md`, restricted to the cases this
-implementation can tell apart:
+The verdicts, restricted to the cases this implementation can tell apart:
 
 | verdict | meaning |
 | --- | --- |
 | `identical` | the shorter video is matched by one monotonic chain and the soundtrack agrees: same content, only resolution / codec / bitrate differ. Also returned when the picture matches poorly but the sound matches well (the "audio veto" case for a heavily obscured picture) |
-| `reencoded` | the picture matches but the soundtrack does not: 画面相同但BGM被替换 |
-| `montage` | matches exist but cannot all sit on one monotonic chain (混剪拼接 or a rewind) |
+| `reencoded` | the picture matches but the soundtrack does not: the same picture with a replaced music bed |
+| `montage` | matches exist but cannot all sit on one monotonic chain (混剪 splicing or a rewind) |
 | `partial` | the matched part is in order but does not cover the shorter video |
 | `different` | no sampled frame matched |
 
@@ -120,19 +144,25 @@ per file, so a single silent clip in the pair is enough to trigger the first row
 
 ## Qt GUI (VividMatchGui)
 
-A Qt 6 GUI based on the `XMuli/myapp-template` template lets the user choose
-the image-compare mode from a function-selection page, pick two images, and
-see the similarity result. The home page also exposes a batch image-compare
-mode for folders, multiple selections or drag-and-drop; results are grouped by
-similarity in collapsible Explorer-style groups, and each duplicate group keeps
-only the selected best image checked.
+A Qt 6 GUI based on the `XMuli/myapp-template` template lets the user choose a
+comparison mode from a function-selection page. There are four:
+
+| mode | what it does |
+| --- | --- |
+| 图片比对 (image) | pick two images, see the similarity result |
+| 批量图片比对 (batch image) | add a folder, several files or a drag-and-drop; results are grouped by similarity in collapsible Explorer-style groups, and each duplicate group keeps only the selected best image checked |
+| 视频比对 (video) | pick two clips and compare picture, timing and sound |
+| 批量视频比对 (batch video) | add a folder of clips, group the ones that are the same video, and pick one to keep per group |
+
+All four are also listed in the 文件 (File) menu.
 
 ```bat
 gui\build_gui.bat
 gui\run_gui.bat
 ```
 
-See `gui/README.md` for Qt/OpenCV paths and VS Code Qt extension setup.
+See `gui/README.md` ([简体中文](gui/README.zh-CN.md)) for Qt/OpenCV paths and
+VS Code Qt extension setup.
 
 To give the GUI to computers that do not have Qt/OpenCV installed, package a
 portable copy once on a development machine:
@@ -150,9 +180,9 @@ without installing Qt or OpenCV.
 
 - `photo_a_800x600.png`, `photo_a_400x300.png` and `photo_tall_300x600.png` are
   the same picture at different sizes / aspect ratios, so they must land in one
-  相似组 (they score 100% against each other).
+  duplicate group (they score 100% against each other).
 - `photo_b_640x480.png` is a different picture, so it must land in the
-  无相同图片 group (about 57-61% against the others).
+  no-duplicates group (about 57-61% against the others).
 
 Regenerate them with:
 

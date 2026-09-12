@@ -1,7 +1,7 @@
 #ifndef VIVIDMATCH_AUDIO_FINGERPRINT_HPP
 #define VIVIDMATCH_AUDIO_FINGERPRINT_HPP
 
-// Audio layer of strategy.md.
+// Audio layer of the video comparison.
 //
 // The audio track is decoded to 16 kHz mono PCM, cut into one-second windows,
 // and each window is reduced to a few spectral features: RMS energy, spectral
@@ -9,7 +9,7 @@
 // similarity, so the same soundtrack matches across bitrates and channel
 // layouts while a replaced music bed does not.
 //
-// strategy.md specifies FFTW for the STFT. This implementation uses a small
+// The STFT could have been handed to FFTW. This implementation uses a small
 // radix-2 FFT written here instead, so the project keeps OpenCV as its only
 // library dependency.
 //
@@ -43,7 +43,8 @@
 
 namespace vividmatch {
 
-// strategy.md asks for 16 kHz mono PCM.
+// Speech-grade mono PCM: enough for a spectral fingerprint, and it keeps the
+// decoded intermediate small (about 2 MB per minute).
 inline constexpr int kAudioSampleRate = 16000;
 // Analysis window for the STFT.
 inline constexpr int kAudioFftSize = 1024;

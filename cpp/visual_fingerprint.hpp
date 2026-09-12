@@ -142,7 +142,7 @@ inline Fingerprint fingerprintFromFile(const std::string& path) {
 
 // Similarity in [0, 1], where 1 means every kept block hashes identically.
 //
-// This is the 抗马赛克 rule from strategy.md: blocks are compared by Hamming
+// This is the 抗马赛克 rule: blocks are compared by Hamming
 // distance, the `discard` worst blocks are dropped, and the rest are averaged.
 // Dropping the worst blocks is what lets a watermark, a black bar or a mosaic
 // patch sit over part of the picture without dragging the score down, while a

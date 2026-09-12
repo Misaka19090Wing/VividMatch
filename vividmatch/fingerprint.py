@@ -1,6 +1,6 @@
 """Resolution-robust visual fingerprints built on OpenCV DCT.
 
-The strategy in strategy.md is implemented here for still images:
+This mirrors `cpp/visual_fingerprint.hpp` for still images:
 1. Normalise every image to a fixed 64x64 grayscale canvas.
 2. Split the canvas into a 4x4 grid of 16 non-overlapping blocks.
 3. Run a 2D DCT on every block and encode the low-frequency coefficients
@@ -113,8 +113,8 @@ def compare_fingerprints(
 ) -> float:
     """Return similarity in [0, 1], where 1 means visually identical.
 
-    Per strategy.md, the four least similar blocks are ignored so partial
-    occlusion or local encoding artefacts do not dominate the result.
+    The four least similar blocks are ignored so partial occlusion or local
+    encoding artefacts do not dominate the result.
     """
 
     left_bits = _unpack(left.blocks)
