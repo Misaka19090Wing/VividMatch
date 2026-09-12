@@ -156,6 +156,42 @@ comparison mode from a function-selection page. There are four:
 
 All four are also listed in the 文件 (File) menu.
 
+### Language
+
+The interface is bilingual: **English** and **Simplified Chinese**. English is the
+source language, so the strings in the code are English and the Chinese text lives
+in `i18n/vividmatch_zh_CN.ts` compiled to `vividmatch_zh_CN.qm`. That ordering is
+deliberate: if the `.qm` is missing or cannot be loaded the application stays in
+English rather than falling back to Chinese, which a reader may not know.
+
+On first run the language follows the operating system (`QLocale::system()`); a
+`zh*` system gets Chinese, everything else English. **文件 → 语言 / File →
+Language** overrides it with *Follow the system*, *English* or *Simplified
+Chinese*, and the choice is remembered in `QSettings`. Switching applies
+immediately, without a restart: Qt sends a `LanguageChange` event and each page
+rebuilds its own text, including the result panels, whose numbers are re-rendered
+rather than re-translated.
+
+```bat
+gui\build_gui.bat
+```
+
+builds the translation as part of the normal build. It needs `lrelease` from the
+Qt Linguist tools; without it the build warns and produces an English-only
+application, which is still fully usable.
+
+Two helpers keep the translation honest (`tests/i18n/`):
+
+| command | what it does |
+| --- | --- |
+| `python tests/i18n/extract_strings.py check` | every `tr()` string has a translation, and no mapping entry is stale |
+| `python tests/i18n/build_translations.py` | writes `i18n/*.ts` from `tests/i18n/zh_CN.json` and compiles the `.qm` |
+
+`lupdate` is deliberately not used: the 6.11 build available here rejects every
+`.cpp` with *"has no recognized extension"*, even with `-extensions cpp`, so it
+cannot produce the file at all. The extractor joins adjacent string literals the
+way C++ and Qt do, which matters because several `tr()` calls span lines.
+
 ```bat
 gui\build_gui.bat
 gui\run_gui.bat

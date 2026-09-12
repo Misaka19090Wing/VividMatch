@@ -24,6 +24,13 @@ mkdir "%STAGE%"
 copy /Y "%GUI_DIR%\bin\VividMatchGui.exe" "%STAGE%\" >nul
 if errorlevel 1 exit /b 1
 
+rem The compiled interface translations travel with the executable. Without them
+rem the app still runs, in English, because English is the source language.
+if exist "%GUI_DIR%\bin\translations" (
+    mkdir "%STAGE%\translations" >nul 2>nul
+    copy /Y "%GUI_DIR%\bin\translations\*.qm" "%STAGE%\translations\" >nul
+)
+
 for /f "delims=" %%F in ('dir /b /a-d "%OPENCV_BIN%\opencv_world*.dll" 2^>nul ^| findstr /v /e /i "d.dll"') do (
     copy /Y "%OPENCV_BIN%\%%F" "%STAGE%\" >nul
 )

@@ -30,6 +30,8 @@ qt_add_executable(VividMatchGui WIN32
     src/ui/main/videocomparepage.h
     src/ui/main/videobatchpage.cpp
     src/ui/main/videobatchpage.h
+    src/ui/main/languagemanager.cpp
+    src/ui/main/languagemanager.h
 )
 
 # The video pages fingerprint clips with the C++ video/audio headers, so they
@@ -50,4 +52,19 @@ set_target_properties(VividMatchGui PROPERTIES
 if(MSVC)
     target_compile_options(VividMatchGui PRIVATE /utf-8)
     target_compile_definitions(VividMatchGui PRIVATE _CRT_SECURE_NO_WARNINGS)
+endif()
+
+# The compiled translations sit next to the executable so the portable package
+# carries them. English is the source language, so only .qm files are needed;
+# a missing one simply means the Chinese interface is not offered.
+set(TRANSLATION_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../i18n")
+file(GLOB TRANSLATION_FILES "${TRANSLATION_DIR}/*.qm")
+if(TRANSLATION_FILES)
+    add_custom_command(TARGET VividMatchGui POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E make_directory
+                "$<TARGET_FILE_DIR:VividMatchGui>/translations"
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                ${TRANSLATION_FILES}
+                "$<TARGET_FILE_DIR:VividMatchGui>/translations"
+        COMMENT "Copying translations next to the executable")
 endif()

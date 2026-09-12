@@ -17,6 +17,28 @@ of [XMuli/myapp-template](https://github.com/XMuli/myapp-template) (MIT).
 The GUI opens on a function-selection home page offering four comparison modes,
 all four of which are also listed in the 文件 (File) menu.
 
+## Language
+
+The interface is bilingual. English is the source language, so the strings in the
+code are English and the Chinese text lives in `../i18n/vividmatch_zh_CN.qm`; if
+that file is missing the interface stays English, which is why it is the source.
+
+- On first run the language follows the operating system's UI language.
+- **文件 → 语言 / File → Language** offers *Follow the system*, *English* and
+  *Simplified Chinese*; the choice is stored with `QSettings`.
+- Switching is immediate. Qt sends `LanguageChange` and every page rebuilds its own
+  strings in `changeEvent()`; strings that embed numbers (the result panels, the
+  group headings, the status line) are regenerated from stored state rather than
+  re-translated, so they cannot go stale in the other language.
+
+`gui\build_gui.bat` builds the translation as part of the build and needs
+`lrelease` from the Qt Linguist tools. Without it the build warns and produces an
+English-only application, which still works.
+
+`LanguageManager` looks for the `.qm` next to the executable (in `translations/`,
+`i18n/` or the executable's own directory) and one level up, so it works both from
+the build tree and from the portable package.
+
 ## Image mode
 
 Selecting image-compare mode opens a page where the user chooses two image files

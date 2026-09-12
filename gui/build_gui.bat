@@ -19,6 +19,16 @@ if not defined CMAKE_CMD (
 set "GUI_DIR=%~dp0"
 if "%GUI_DIR:~-1%"=="\" set "GUI_DIR=%GUI_DIR:~0,-1%"
 
+rem Build the Chinese translation into i18n\. English is the source language, so
+rem there is nothing to build for it. A missing lrelease is not fatal: the build
+rem warns and the application stays in English.
+pushd "%GUI_DIR%\.."
+python tests\i18n\build_translations.py
+if errorlevel 1 (
+    echo [build_gui] the translation step failed; continuing in English only.
+)
+popd
+
 if not defined CMAKE_GENERATOR set "CMAKE_GENERATOR=Visual Studio 17 2022"
 if not defined CMAKE_GENERATOR_ARGS set "CMAKE_GENERATOR_ARGS=-A x64"
 

@@ -132,6 +132,35 @@ Qt 6 界面基于 `XMuli/myapp-template` 模板，从功能选择页进入不同
 
 四种模式同时也列在「文件」菜单里。
 
+### 界面语言
+
+界面为双语：**英文**与**简体中文**。英文是原文语言，因此代码里的字符串是英文，中文
+放在 `i18n/vividmatch_zh_CN.ts`，编译为 `vividmatch_zh_CN.qm`。这个顺序是刻意的：
+一旦 `.qm` 缺失或加载失败，程序会留在英文，而不是退回读者可能看不懂的中文。
+
+首次运行跟随操作系统语言（`QLocale::system()`）：`zh*` 系统显示中文，其它显示英文。
+「文件 → 语言 / File → Language」可改为「跟随系统」「English」或「简体中文」，选择会
+记录在 `QSettings` 中。切换立即生效，无需重启：Qt 会发送 `LanguageChange` 事件，各页面
+据此重建自己的文案，包括结果面板 —— 那里的数字是重新渲染而不是重新翻译。
+
+```bat
+gui\build_gui.bat
+```
+
+在正常构建中一并生成翻译。它需要 Qt Linguist 工具里的 `lrelease`；没有时会给出警告并
+产出仅英文的程序，功能完全可用。
+
+两个脚本用于保证翻译不跑偏（位于 `tests/i18n/`）：
+
+| 命令 | 作用 |
+| --- | --- |
+| `python tests/i18n/extract_strings.py check` | 每条 `tr()` 都有翻译，且没有失效的映射项 |
+| `python tests/i18n/build_translations.py` | 由 `tests/i18n/zh_CN.json` 生成 `i18n/*.ts` 并编译 `.qm` |
+
+这里刻意不使用 `lupdate`：本机可用的 6.11 版本对每个 `.cpp` 都报「has no recognized
+extension」，即使加上 `-extensions cpp` 也一样，根本无法生成文件。抽取脚本会像 C++ 与
+Qt 那样拼接相邻的字符串字面量 —— 这一点很重要，因为有几处 `tr()` 是跨行的。
+
 ```bat
 gui\build_gui.bat
 gui\run_gui.bat

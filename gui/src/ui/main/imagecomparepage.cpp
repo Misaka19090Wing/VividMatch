@@ -35,11 +35,6 @@ namespace {
 constexpr int kPreviewWidth = 340;
 constexpr int kPreviewHeight = 230;
 
-QString previewText(const QString& path)
-{
-    return path.isEmpty() ? QStringLiteral("未选择图片") : path;
-}
-
 bool decodeImage(const QString& path, cv::Mat& output)
 {
     QFile file(path);
@@ -101,14 +96,14 @@ ImageComparePage::ImageComparePage(QWidget* parent)
     root->setSpacing(14);
 
     QHBoxLayout* header = new QHBoxLayout;
-    QPushButton* backButton = new QPushButton(tr("返回功能选择"), this);
-    backButton->setObjectName(QStringLiteral("secondaryButton"));
-    connect(backButton, &QPushButton::released, this, &ImageComparePage::backRequested);
-    QLabel* title = new QLabel(tr("图片比对模式"), this);
-    title->setStyleSheet(QStringLiteral("font-size:20px;font-weight:600;color:#1f2937;"));
-    header->addWidget(backButton);
+    m_backButton = new QPushButton(this);
+    m_backButton->setObjectName(QStringLiteral("secondaryButton"));
+    connect(m_backButton, &QPushButton::released, this, &ImageComparePage::backRequested);
+    m_titleLabel = new QLabel(this);
+    m_titleLabel->setStyleSheet(QStringLiteral("font-size:20px;font-weight:600;color:#1f2937;"));
+    header->addWidget(m_backButton);
     header->addSpacing(10);
-    header->addWidget(title);
+    header->addWidget(m_titleLabel);
     header->addStretch(1);
     root->addLayout(header);
 
@@ -124,8 +119,6 @@ ImageComparePage::ImageComparePage(QWidget* parent)
 
     m_firstPreview = makePreview();
     m_secondPreview = makePreview();
-    m_firstPreview->setText(tr("未选择图片一"));
-    m_secondPreview->setText(tr("未选择图片二"));
     m_firstPreview->setAcceptDrops(true);
     m_secondPreview->setAcceptDrops(true);
     m_firstPreview->installEventFilter(this);
@@ -145,13 +138,13 @@ ImageComparePage::ImageComparePage(QWidget* parent)
     m_firstPathLabel = makePathLabel();
     m_secondPathLabel = makePathLabel();
 
-    auto makeColumn = [this](const QString& sideTitle, QLabel* preview, QLabel* pathLabel,
+    auto makeColumn = [this](QLabel* side, QLabel* preview, QLabel* pathLabel,
                              QPushButton* chooseButton) {
         QWidget* column = new QWidget(this);
         QVBoxLayout* layout = new QVBoxLayout(column);
         layout->setContentsMargins(0, 0, 0, 0);
         layout->setSpacing(8);
-        QLabel* side = new QLabel(sideTitle, column);
+        side->setParent(column);
         side->setStyleSheet(QStringLiteral("font-weight:600;color:#334155;"));
         layout->addWidget(side);
         layout->addWidget(preview, 0, Qt::AlignHCenter);
@@ -160,24 +153,29 @@ ImageComparePage::ImageComparePage(QWidget* parent)
         return column;
     };
 
-    QPushButton* firstButton = new QPushButton(tr("选择图片一"), this);
-    firstButton->setObjectName(QStringLiteral("secondaryButton"));
-    QPushButton* secondButton = new QPushButton(tr("选择图片二"), this);
-    secondButton->setObjectName(QStringLiteral("secondaryButton"));
-    connect(firstButton, &QPushButton::released, this, &ImageComparePage::chooseFirstImage);
-    connect(secondButton, &QPushButton::released, this, &ImageComparePage::chooseSecondImage);
+    m_firstSideLabel = new QLabel(this);
+    m_secondSideLabel = new QLabel(this);
+    m_firstButton = new QPushButton(this);
+    m_firstButton->setObjectName(QStringLiteral("secondaryButton"));
+    m_secondButton = new QPushButton(this);
+    m_secondButton->setObjectName(QStringLiteral("secondaryButton"));
+    connect(m_firstButton, &QPushButton::released, this, &ImageComparePage::chooseFirstImage);
+    connect(m_secondButton, &QPushButton::released, this, &ImageComparePage::chooseSecondImage);
 
     QHBoxLayout* imageRow = new QHBoxLayout;
     imageRow->setSpacing(22);
     imageRow->addStretch(1);
-    imageRow->addWidget(makeColumn(tr("图片一"), m_firstPreview, m_firstPathLabel, firstButton));
-    imageRow->addWidget(makeColumn(tr("图片二"), m_secondPreview, m_secondPathLabel, secondButton));
+    imageRow->addWidget(makeColumn(m_firstSideLabel, m_firstPreview, m_firstPathLabel,
+                                   m_firstButton));
+    imageRow->addWidget(makeColumn(m_secondSideLabel, m_secondPreview, m_secondPathLabel,
+                                   m_secondButton));
     imageRow->addStretch(1);
     root->addLayout(imageRow);
 
     QHBoxLayout* compareRow = new QHBoxLayout;
     compareRow->addStretch(1);
-    compareRow->addWidget(new QLabel(tr("匹配阈值"), this));
+    m_thresholdLabel = new QLabel(this);
+    compareRow->addWidget(m_thresholdLabel);
     m_threshold = new QDoubleSpinBox(this);
     m_threshold->setRange(0.50, 0.99);
     m_threshold->setDecimals(2);
@@ -185,7 +183,7 @@ ImageComparePage::ImageComparePage(QWidget* parent)
     m_threshold->setValue(0.78);
     compareRow->addWidget(m_threshold);
     compareRow->addSpacing(18);
-    m_compareButton = new QPushButton(tr("开始比对"), this);
+    m_compareButton = new QPushButton(this);
     m_compareButton->setObjectName(QStringLiteral("primaryButton"));
     m_compareButton->setEnabled(false);
     connect(m_compareButton, &QPushButton::released, this,
@@ -206,7 +204,7 @@ ImageComparePage::ImageComparePage(QWidget* parent)
     resultLayout->setSpacing(24);
 
     QVBoxLayout* verdictLayout = new QVBoxLayout;
-    m_resultVerdict = new QLabel(tr("等待比对"), resultPanel);
+    m_resultVerdict = new QLabel(resultPanel);
     m_resultVerdict->setObjectName(QStringLiteral("verdict"));
     m_resultSource = new QLabel(QString(), resultPanel);
     verdictLayout->addWidget(m_resultVerdict);
@@ -219,6 +217,39 @@ ImageComparePage::ImageComparePage(QWidget* parent)
     resultLayout->addWidget(m_resultScore);
     root->addWidget(resultPanel);
     root->addStretch(1);
+
+    retranslate();
+}
+
+void ImageComparePage::changeEvent(QEvent* event)
+{
+    if (event->type() == QEvent::LanguageChange) {
+        retranslate();
+    }
+    QWidget::changeEvent(event);
+}
+
+void ImageComparePage::retranslate()
+{
+    m_backButton->setText(tr("Back to mode selection"));
+    m_titleLabel->setText(tr("Image comparison mode"));
+
+    m_firstSideLabel->setText(tr("Image one"));
+    m_secondSideLabel->setText(tr("Image two"));
+    m_firstButton->setText(tr("Choose image one"));
+    m_secondButton->setText(tr("Choose image two"));
+    m_thresholdLabel->setText(tr("Match threshold"));
+    m_compareButton->setText(tr("Start comparison"));
+
+    // The preview placeholders double as the drop hint, so they follow the
+    // language too. A chosen image has its own picture and no text.
+    if (m_firstImage.isNull()) {
+        m_firstPreview->setText(tr("No image one chosen"));
+    }
+    if (m_secondImage.isNull()) {
+        m_secondPreview->setText(tr("No image two chosen"));
+    }
+    refreshResultText();
 }
 
 void ImageComparePage::chooseFirstImage()
@@ -234,8 +265,8 @@ void ImageComparePage::chooseSecondImage()
 void ImageComparePage::chooseImage(int slot)
 {
     const QString path = QFileDialog::getOpenFileName(
-        this, tr("选择图片"), QString(),
-        tr("图片 (*.png *.jpg *.jpeg *.bmp *.webp);;所有文件 (*)"));
+        this, tr("Choose an image"), QString(),
+        tr("Images (*.png *.jpg *.jpeg *.bmp *.webp);;All files (*)"));
     if (path.isEmpty()) {
         return;
     }
@@ -246,7 +277,7 @@ void ImageComparePage::setImagePath(int slot, const QString& path)
 {
     QImage image(path);
     if (image.isNull()) {
-        showError(tr("无法读取图片：%1").arg(path));
+        showError(tr("Cannot read the image: %1").arg(path));
         return;
     }
 
@@ -263,7 +294,9 @@ void ImageComparePage::setImagePath(int slot, const QString& path)
     }
     refreshPreview(slot);
     m_compareButton->setEnabled(!m_firstPath.isEmpty() && !m_secondPath.isEmpty());
-    m_resultVerdict->setText(tr("等待比对"));
+    // A new image invalidates the previous result.
+    m_hasResult = false;
+    m_resultVerdict->setText(tr("Waiting to compare"));
     m_resultScore->setText(QStringLiteral("--"));
     m_resultSource->clear();
 }
@@ -305,7 +338,7 @@ void ImageComparePage::compareSelectedImages()
     cv::Mat first;
     cv::Mat second;
     if (!decodeImage(m_firstPath, first) || !decodeImage(m_secondPath, second)) {
-        showError(tr("图片解码失败，请确认两张图片仍可正常读取。"));
+        showError(tr("Decoding failed; check that both images can still be opened."));
         return;
     }
 
@@ -325,25 +358,50 @@ void ImageComparePage::setResult(double score, double threshold, int firstWidth,
                                  int firstHeight, int secondWidth, int secondHeight,
                                  qint64 elapsedMs)
 {
-    const bool matched = score >= threshold;
-    m_resultVerdict->setText(matched ? tr("判定：相同图片") : tr("判定：不同图片"));
-    m_resultVerdict->setStyleSheet(matched
-                                       ? QStringLiteral("color:#15803d;font-size:18px;font-weight:700;")
-                                       : QStringLiteral("color:#b91c1c;font-size:18px;font-weight:700;"));
-    m_resultScore->setText(QStringLiteral("%1%").arg(score * 100.0, 0, 'f', 2));
+    // Remember the inputs: the verdict text embeds numbers, so a language switch
+    // recomputes it from these rather than trying to re-translate a finished
+    // sentence.
+    m_hasResult = true;
+    m_score = score;
+    m_resultThreshold = threshold;
+    m_firstWidth = firstWidth;
+    m_firstHeight = firstHeight;
+    m_secondWidth = secondWidth;
+    m_secondHeight = secondHeight;
+    m_elapsedMs = elapsedMs;
+    refreshResultText();
+}
+
+void ImageComparePage::refreshResultText()
+{
+    if (!m_hasResult) {
+        m_resultVerdict->setText(tr("Waiting to compare"));
+        m_resultVerdict->setStyleSheet(QString());
+        m_resultScore->setText(QStringLiteral("--"));
+        m_resultSource->clear();
+        return;
+    }
+
+    const bool matched = m_score >= m_resultThreshold;
+    m_resultVerdict->setText(matched ? tr("Verdict: the same picture")
+                                     : tr("Verdict: different pictures"));
+    m_resultVerdict->setStyleSheet(
+        matched ? QStringLiteral("color:#15803d;font-size:18px;font-weight:700;")
+                : QStringLiteral("color:#b91c1c;font-size:18px;font-weight:700;"));
+    m_resultScore->setText(QStringLiteral("%1%").arg(m_score * 100.0, 0, 'f', 2));
     m_resultSource->setText(
-        tr("图片一 %1x%2   vs   图片二 %3x%4   阈值 %5   %6")
-            .arg(firstWidth)
-            .arg(firstHeight)
-            .arg(secondWidth)
-            .arg(secondHeight)
-            .arg(threshold, 0, 'f', 2)
-            .arg(formatutils::durationLabel(elapsedMs)));
+        tr("Image one %1x%2   vs   image two %3x%4   threshold %5   %6")
+            .arg(m_firstWidth)
+            .arg(m_firstHeight)
+            .arg(m_secondWidth)
+            .arg(m_secondHeight)
+            .arg(m_resultThreshold, 0, 'f', 2)
+            .arg(formatutils::durationLabel(m_elapsedMs)));
 }
 
 void ImageComparePage::showError(const QString& message)
 {
-    QMessageBox::warning(this, tr("比对失败"), message);
+    QMessageBox::warning(this, tr("Comparison failed"), message);
 }
 
 bool ImageComparePage::eventFilter(QObject* watched, QEvent* event)

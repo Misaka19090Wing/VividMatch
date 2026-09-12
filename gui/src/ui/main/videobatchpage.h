@@ -128,6 +128,8 @@ protected:
     bool eventFilter(QObject* watched, QEvent* event) override;
     void dragEnterEvent(QDragEnterEvent* event) override;
     void dropEvent(QDropEvent* event) override;
+    // Qt sends LanguageChange when a translator is installed or removed.
+    void changeEvent(QEvent* event) override;
 
 private slots:
     void chooseFolder();
@@ -192,6 +194,9 @@ private:
     };
 
     void addPaths(const QStringList& paths);
+    // Re-applies every visible string; called on a language switch and whenever a
+    // group is created, so headings and menus follow the language too.
+    void retranslate();
     // Starts background frame grabs for clips that do not have a preview yet.
     void requestThumbnails();
     void applyThumbnail(const QString& path, const QImage& image, int width, int height,
@@ -249,12 +254,25 @@ private:
     // never queues the same grab twice.
     QSet<QString> m_pendingThumbnails;
 
+    // Kept so a language switch can rewrite them.
+    QPushButton* m_backButton;
+    QLabel* m_titleLabel;
+    QPushButton* m_addFolderButton;
+    QPushButton* m_addVideosButton;
+    QLabel* m_policyLabel;
+    QLabel* m_searchLabel;
+    QLabel* m_captureLabel;
+    QPushButton* m_regrabButton;
+
     QHash<int, RowData> m_records;
     QStringList m_listedPaths;  // clips already shown in the tree
     int m_nextRecordId;
     int m_lastClipCount;
     int m_lastDuplicateGroups;
     int m_lastFailedCount;
+    // Last measured run time, so the completion message can be rebuilt in the
+    // other language.
+    qint64 m_lastTotalMs;
     QPointer<QThread> m_thread;
     VideoBatchWorker* m_worker;
     bool m_busy;

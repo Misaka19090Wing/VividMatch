@@ -348,18 +348,18 @@ QString groupLabel(const VideoBatchGroupInfo& group)
 {
     if (group.duplicate) {
         QString label =
-            QCoreApplication::translate("videobatchpage", "重复组 · 相似度 %1% · %2 个")
+            VideoBatchPage::tr("Duplicate group - similarity %1% - %2 clips")
                 .arg(group.similarity * 100.0, 0, 'f', 1)
                 .arg(group.rows.size());
         if (group.audioDiffers) {
-            label += QCoreApplication::translate("videobatchpage", " · 含音频不同的版本");
+            label += VideoBatchPage::tr(" - contains a version with different audio");
         }
         return label;
     }
     if (group.montage) {
-        return QCoreApplication::translate("videobatchpage", "疑似混剪 · 仅部分重合");
+        return VideoBatchPage::tr("Possibly spliced - only partly overlapping");
     }
-    return QCoreApplication::translate("videobatchpage", "无重复");
+    return VideoBatchPage::tr("No duplicates");
 }
 
 // One preview grab, run on the global thread pool. Pooling keeps the UI
@@ -481,9 +481,9 @@ void VideoBatchWorker::run()
             paths, vividmatch::kDefaultFrameThreshold, vividmatch::kDefaultSignatureThreshold,
             vividmatch::kDefaultBatchWorkers, ranking,
             [this](int done, int total, const std::string& stage) {
-                const QString label = stage == "extracting" ? tr("提取指纹")
-                                      : stage == "audio"    ? tr("比对音频")
-                                                            : tr("比对中");
+                const QString label = stage == "extracting" ? tr("Reading clips")
+                                      : stage == "audio"    ? tr("Comparing audio")
+                                                            : tr("Comparing");
                 emit progress(done, total, label);
             });
 
@@ -564,10 +564,19 @@ VideoBatchPage::VideoBatchPage(QWidget* parent)
     , m_deleteButton(nullptr)
     , m_status(new QLabel(this))
     , m_delegate(new VideoBatchItemDelegate(this))
+    , m_backButton(nullptr)
+    , m_titleLabel(nullptr)
+    , m_addFolderButton(nullptr)
+    , m_addVideosButton(nullptr)
+    , m_policyLabel(nullptr)
+    , m_searchLabel(nullptr)
+    , m_captureLabel(nullptr)
+    , m_regrabButton(nullptr)
     , m_nextRecordId(1)
     , m_lastClipCount(0)
     , m_lastDuplicateGroups(0)
     , m_lastFailedCount(0)
+    , m_lastTotalMs(0)
     , m_worker(nullptr)
     , m_busy(false)
 {
@@ -580,38 +589,38 @@ VideoBatchPage::VideoBatchPage(QWidget* parent)
     root->setSpacing(10);
 
     QHBoxLayout* header = new QHBoxLayout;
-    QPushButton* backButton = new QPushButton(tr("返回功能选择"), this);
-    backButton->setObjectName(QStringLiteral("secondaryButton"));
-    connect(backButton, &QPushButton::released, this, &VideoBatchPage::backRequested);
-    QLabel* title = new QLabel(tr("批量视频比对"), this);
-    title->setStyleSheet(QStringLiteral("font-size:20px;font-weight:600;color:#1f2937;"));
-    header->addWidget(backButton);
+    m_backButton = new QPushButton(this);
+    m_backButton->setObjectName(QStringLiteral("secondaryButton"));
+    connect(m_backButton, &QPushButton::released, this, &VideoBatchPage::backRequested);
+    m_titleLabel = new QLabel(this);
+    m_titleLabel->setStyleSheet(QStringLiteral("font-size:20px;font-weight:600;color:#1f2937;"));
+    header->addWidget(m_backButton);
     header->addSpacing(10);
-    header->addWidget(title);
+    header->addWidget(m_titleLabel);
     header->addStretch(1);
     root->addLayout(header);
 
     // Controls mirror the batch image page: add, then act on the checked rows,
     // with the primary action on the right next to the keep policy.
-    QPushButton* addFolderButton = new QPushButton(tr("选择文件夹"), this);
-    addFolderButton->setObjectName(QStringLiteral("secondaryButton"));
-    QPushButton* addVideosButton = new QPushButton(tr("选择视频"), this);
-    addVideosButton->setObjectName(QStringLiteral("secondaryButton"));
-    m_selectAllButton = new QPushButton(tr("全选"), this);
+    m_addFolderButton = new QPushButton(this);
+    m_addFolderButton->setObjectName(QStringLiteral("secondaryButton"));
+    m_addVideosButton = new QPushButton(this);
+    m_addVideosButton->setObjectName(QStringLiteral("secondaryButton"));
+    m_selectAllButton = new QPushButton(this);
     m_selectAllButton->setObjectName(QStringLiteral("secondaryButton"));
-    m_invertButton = new QPushButton(tr("反选"), this);
+    m_invertButton = new QPushButton(this);
     m_invertButton->setObjectName(QStringLiteral("secondaryButton"));
-    m_removeButton = new QPushButton(tr("移出勾选项"), this);
+    m_removeButton = new QPushButton(this);
     m_removeButton->setObjectName(QStringLiteral("secondaryButton"));
-    m_deleteButton = new QPushButton(tr("删除勾选文件"), this);
+    m_deleteButton = new QPushButton(this);
     m_deleteButton->setObjectName(QStringLiteral("secondaryButton"));
-    m_clearButton = new QPushButton(tr("清空列表"), this);
+    m_clearButton = new QPushButton(this);
     m_clearButton->setObjectName(QStringLiteral("secondaryButton"));
-    m_compareButton = new QPushButton(tr("开始比对"), this);
+    m_compareButton = new QPushButton(this);
     m_compareButton->setObjectName(QStringLiteral("primaryButton"));
 
-    connect(addFolderButton, &QPushButton::released, this, &VideoBatchPage::chooseFolder);
-    connect(addVideosButton, &QPushButton::released, this, &VideoBatchPage::chooseVideos);
+    connect(m_addFolderButton, &QPushButton::released, this, &VideoBatchPage::chooseFolder);
+    connect(m_addVideosButton, &QPushButton::released, this, &VideoBatchPage::chooseVideos);
     connect(m_selectAllButton, &QPushButton::released, this, &VideoBatchPage::selectAllChecked);
     connect(m_invertButton, &QPushButton::released, this, &VideoBatchPage::invertChecked);
     connect(m_removeButton, &QPushButton::released, this, &VideoBatchPage::removeChecked);
@@ -620,8 +629,8 @@ VideoBatchPage::VideoBatchPage(QWidget* parent)
     connect(m_compareButton, &QPushButton::released, this, &VideoBatchPage::startCompare);
 
     QHBoxLayout* controls = new QHBoxLayout;
-    controls->addWidget(addFolderButton);
-    controls->addWidget(addVideosButton);
+    controls->addWidget(m_addFolderButton);
+    controls->addWidget(m_addVideosButton);
     controls->addWidget(m_selectAllButton);
     controls->addWidget(m_invertButton);
     controls->addSpacing(8);
@@ -631,14 +640,16 @@ VideoBatchPage::VideoBatchPage(QWidget* parent)
     controls->addStretch(1);
     controls->addWidget(m_compareButton);
     controls->addSpacing(12);
-    controls->addWidget(new QLabel(tr("保留策略"), this));
-    m_policy->addItem(tr("分辨率最高"), static_cast<int>(KeepPolicy::HighestResolution));
-    m_policy->addItem(tr("分辨率最低"), static_cast<int>(KeepPolicy::LowestResolution));
-    m_policy->addItem(tr("文件最大"), static_cast<int>(KeepPolicy::LargestFile));
-    m_policy->addItem(tr("文件最小"), static_cast<int>(KeepPolicy::SmallestFile));
-    m_policy->addItem(tr("修改日期最近"), static_cast<int>(KeepPolicy::NewestModified));
-    m_policy->addItem(tr("修改日期最远"), static_cast<int>(KeepPolicy::OldestModified));
-    m_policy->addItem(tr("全部保留"), static_cast<int>(KeepPolicy::KeepAll));
+    m_policyLabel = new QLabel(this);
+    controls->addWidget(m_policyLabel);
+    // Items are labelled in retranslate(); the data identifies each policy.
+    m_policy->addItem(QString(), static_cast<int>(KeepPolicy::HighestResolution));
+    m_policy->addItem(QString(), static_cast<int>(KeepPolicy::LowestResolution));
+    m_policy->addItem(QString(), static_cast<int>(KeepPolicy::LargestFile));
+    m_policy->addItem(QString(), static_cast<int>(KeepPolicy::SmallestFile));
+    m_policy->addItem(QString(), static_cast<int>(KeepPolicy::NewestModified));
+    m_policy->addItem(QString(), static_cast<int>(KeepPolicy::OldestModified));
+    m_policy->addItem(QString(), static_cast<int>(KeepPolicy::KeepAll));
     m_policy->setCurrentIndex(0);
     controls->addWidget(m_policy);
     root->addLayout(controls);
@@ -647,8 +658,8 @@ VideoBatchPage::VideoBatchPage(QWidget* parent)
             [this](int) { applyPolicyToChecks(); });
 
     QHBoxLayout* searchRow = new QHBoxLayout;
-    searchRow->addWidget(new QLabel(tr("定位"), this));
-    m_search->setPlaceholderText(tr("Ctrl+F 搜索名称或路径"));
+    m_searchLabel = new QLabel(this);
+    searchRow->addWidget(m_searchLabel);
     m_search->setClearButtonEnabled(true);
     m_search->setMaximumWidth(280);
     m_search->hide();
@@ -657,32 +668,25 @@ VideoBatchPage::VideoBatchPage(QWidget* parent)
     // Where the preview frames are taken from. A spin box plus an explicit
     // re-grab button rather than a live re-grab: grabbing a frame means seeking
     // and decoding, so re-running it on every keystroke would be wasteful.
-    searchRow->addWidget(new QLabel(tr("截帧位置"), this));
+    m_captureLabel = new QLabel(this);
+    searchRow->addWidget(m_captureLabel);
     m_capturePosition = new QSpinBox(this);
     m_capturePosition->setRange(0, 99);
     m_capturePosition->setValue(kDefaultCapturePercent);
-    m_capturePosition->setSuffix(tr(" %"));
-    m_capturePosition->setToolTip(
-        tr("缩略图取片长百分之多少处，默认 50%（片长中间）。\n"
-           "取 0% 是视频的第一帧，改成别的值后按「重新截帧」生效。"));
     m_capturePosition->setMaximumWidth(84);
     searchRow->addWidget(m_capturePosition);
-    QPushButton* regrabButton = new QPushButton(tr("重新截帧"), this);
-    regrabButton->setObjectName(QStringLiteral("secondaryButton"));
-    regrabButton->setToolTip(tr("按当前截帧位置重新抓取所有缩略图"));
-    connect(regrabButton, &QPushButton::released, this, &VideoBatchPage::regrabThumbnails);
-    searchRow->addWidget(regrabButton);
+    m_regrabButton = new QPushButton(this);
+    m_regrabButton->setObjectName(QStringLiteral("secondaryButton"));
+    connect(m_regrabButton, &QPushButton::released, this, &VideoBatchPage::regrabThumbnails);
+    searchRow->addWidget(m_regrabButton);
     searchRow->addSpacing(18);
     searchRow->addWidget(m_progress, 1);
     m_progress->setRange(0, 1);
     m_progress->setValue(0);
-    m_progress->setFormat(tr("等待比对"));
     root->addLayout(searchRow);
     connect(m_search, &QLineEdit::textChanged, this, &VideoBatchPage::searchChanged);
 
     m_tree->setColumnCount(ColumnCount);
-    m_tree->setHeaderLabels({tr("选中"), tr("画面"), tr("名称"), tr("分辨率"), tr("时长"),
-                             tr("大小"), tr("修改日期")});
     m_tree->setRootIsDecorated(true);
     m_tree->setItemsExpandable(true);
     m_tree->setExpandsOnDoubleClick(true);
@@ -702,10 +706,6 @@ VideoBatchPage::VideoBatchPage(QWidget* parent)
     m_tree->header()->resizeSection(ResolutionColumn, 100);
     m_tree->header()->resizeSection(DurationColumn, 80);
     m_tree->header()->resizeSection(SizeColumn, 100);
-    m_tree->header()->setToolTip(
-        tr("勾选要保留的视频；比对后按保留策略自动勾选。\n"
-           "拖动「画面」列宽会同步放大缩略图与行高。\n"
-           "右键可对单个视频或整个分组操作。"));
     m_delegate->setPreviewColumnWidth(m_tree->header()->sectionSize(PreviewColumn));
 
     connect(m_tree->header(), &QHeaderView::sectionResized, this,
@@ -745,13 +745,96 @@ VideoBatchPage::VideoBatchPage(QWidget* parent)
     connect(this, &VideoBatchPage::thumbnailReady, this, &VideoBatchPage::applyThumbnail,
             Qt::QueuedConnection);
 
+    retranslate();
     setBusy(false);
     updateStatus();
 }
 
+void VideoBatchPage::changeEvent(QEvent* event)
+{
+    if (event->type() == QEvent::LanguageChange) {
+        retranslate();
+    }
+    QWidget::changeEvent(event);
+}
+
+void VideoBatchPage::retranslate()
+{
+    m_backButton->setText(tr("Back to mode selection"));
+    m_titleLabel->setText(tr("Batch video comparison"));
+    m_addFolderButton->setText(tr("Choose folder"));
+    m_addVideosButton->setText(tr("Choose videos"));
+    m_selectAllButton->setText(tr("Select all"));
+    m_invertButton->setText(tr("Invert"));
+    m_removeButton->setText(tr("Remove checked"));
+    m_deleteButton->setText(tr("Delete checked files"));
+    m_clearButton->setText(tr("Clear list"));
+    m_compareButton->setText(tr("Start comparison"));
+    m_policyLabel->setText(tr("Keep policy"));
+    m_searchLabel->setText(tr("Locate"));
+    m_search->setPlaceholderText(tr("Ctrl+F to search name or path"));
+    m_captureLabel->setText(tr("Frame position"));
+    m_capturePosition->setSuffix(tr(" %"));
+    m_capturePosition->setToolTip(
+        tr("How far into each clip the thumbnail is taken, as a percentage of its "
+           "length. The default is 50%, the middle.\n"
+           "0% is the first frame. Changing the value applies on \"Re-grab frames\"."));
+    m_regrabButton->setText(tr("Re-grab frames"));
+    m_regrabButton->setToolTip(tr("Grab every thumbnail again at the current frame "
+                                  "position"));
+
+    const QStringList headers = {tr("Selected"), tr("Frame"), tr("Name"), tr("Resolution"),
+                                 tr("Duration"), tr("Size"), tr("Modified")};
+    if (m_tree->headerItem() == nullptr) {
+        m_tree->setHeaderLabels(headers);
+    } else {
+        for (int i = 0; i < headers.size() && i < m_tree->columnCount(); ++i) {
+            m_tree->headerItem()->setText(i, headers.at(i));
+        }
+    }
+    m_tree->header()->setToolTip(
+        tr("Check the clips to keep; a comparison checks them according to the keep "
+           "policy.\n"
+           "Dragging the Frame column wider scales the thumbnails and the row heights "
+           "with it.\n"
+           "Right-click a clip or a group for its menu."));
+
+    struct PolicyText {
+        KeepPolicy policy;
+        const char* text;
+    };
+    const PolicyText policies[] = {
+        {KeepPolicy::HighestResolution, QT_TR_NOOP("Highest resolution")},
+        {KeepPolicy::LowestResolution, QT_TR_NOOP("Lowest resolution")},
+        {KeepPolicy::LargestFile, QT_TR_NOOP("Largest file")},
+        {KeepPolicy::SmallestFile, QT_TR_NOOP("Smallest file")},
+        {KeepPolicy::NewestModified, QT_TR_NOOP("Newest modified")},
+        {KeepPolicy::OldestModified, QT_TR_NOOP("Oldest modified")},
+        {KeepPolicy::KeepAll, QT_TR_NOOP("Keep everything")},
+    };
+    for (const PolicyText& entry : policies) {
+        const int index = m_policy->findData(static_cast<int>(entry.policy));
+        if (index >= 0) {
+            m_policy->setItemText(index, tr(entry.text));
+        }
+    }
+
+    // Group headings and the status line come from the current state, so they are
+    // regenerated rather than stored.
+    refreshGroupLabels();
+    updateStatus();
+    if (m_lastClipCount > 0) {
+        m_progress->setFormat(tr("Comparison finished - %1 clips - %2")
+                                  .arg(m_lastClipCount)
+                                  .arg(formatutils::durationLabel(m_lastTotalMs)));
+    } else if (!m_busy && m_progress->value() == m_progress->minimum()) {
+        m_progress->setFormat(tr("Waiting to compare"));
+    }
+}
+
 void VideoBatchPage::chooseFolder()
 {
-    const QString folder = QFileDialog::getExistingDirectory(this, tr("选择视频文件夹"));
+    const QString folder = QFileDialog::getExistingDirectory(this, tr("Choose a video folder"));
     if (folder.isEmpty()) {
         return;
     }
@@ -767,8 +850,8 @@ void VideoBatchPage::chooseFolder()
 void VideoBatchPage::chooseVideos()
 {
     const QStringList paths = QFileDialog::getOpenFileNames(
-        this, tr("选择视频"), QString(),
-        tr("视频 (*.mp4 *.mov *.mkv *.avi *.webm *.m4v);;所有文件 (*)"));
+        this, tr("Choose videos"), QString(),
+        tr("Videos (*.mp4 *.mov *.mkv *.avi *.webm *.m4v);;All files (*)"));
     addPaths(paths);
 }
 
@@ -795,7 +878,7 @@ void VideoBatchPage::requestThumbnails()
 void VideoBatchPage::regrabThumbnails()
 {
     if (m_records.isEmpty()) {
-        QMessageBox::information(this, tr("重新截帧"), tr("请先添加视频。"));
+        QMessageBox::information(this, tr("Re-grab frames"), tr("Add some videos first."));
         return;
     }
     // Drop what is stored so requestThumbnails() picks every clip up again. A
@@ -812,7 +895,8 @@ void VideoBatchPage::regrabThumbnails()
     }
     m_tree->doItemsLayout();
     requestThumbnails();
-    m_progress->setFormat(tr("正在按片长 %1% 处重新截帧").arg(capturePositionPercent()));
+    m_progress->setFormat(
+        tr("Grabbing thumbnails again at %1% of each clip").arg(capturePositionPercent()));
 }
 
 void VideoBatchPage::applyThumbnail(const QString& path, const QImage& image, int width,
@@ -877,12 +961,12 @@ void VideoBatchPage::updateCompareButton()
     const bool ready = !m_busy && checked >= 2;
     m_compareButton->setEnabled(ready);
     m_compareButton->setToolTip(
-        ready ? tr("比对已勾选的 %1 个视频").arg(checked)
-              : tr("至少勾选 2 个视频才能开始比对"));
+        ready ? tr("Compare the %1 checked clips").arg(checked)
+              : tr("Check at least 2 clips to start a comparison"));
     // The hint only replaces a waiting prompt, never a result or a running stage.
     if (!m_busy && checked < 2 && m_lastClipCount == 0
         && m_progress->value() == m_progress->minimum()) {
-        m_progress->setFormat(tr("已勾选 %1 个，至少需要 2 个").arg(checked));
+        m_progress->setFormat(tr("%1 checked, at least 2 needed").arg(checked));
     }
 }
 
@@ -926,7 +1010,7 @@ void VideoBatchPage::addPaths(const QStringList& paths)
         rebuildPendingTree();
         m_progress->setRange(0, 1);
         m_progress->setValue(0);
-        m_progress->setFormat(tr("已加入 %1 个视频，等待比对").arg(added));
+        m_progress->setFormat(tr("Added %1 clips, waiting to compare").arg(added));
     }
     updateStatus();
 }
@@ -974,8 +1058,8 @@ QTreeWidgetItem* VideoBatchPage::ensurePendingGroup()
     group->setFirstColumnSpanned(true);
     group->setFlags(Qt::ItemIsEnabled);
     group->setData(CheckColumn, kRecordIdRole, kPendingMarker);
-    group->setData(CheckColumn, kGroupBaseRole, tr("待比对"));
-    group->setText(CheckColumn, tr("待比对"));
+    group->setData(CheckColumn, kGroupBaseRole, tr("Waiting to compare"));
+    group->setText(CheckColumn, tr("Waiting to compare"));
     group->setExpanded(true);
     group->setBackground(CheckColumn, QBrush(QColor(232, 237, 243)));
     group->setForeground(CheckColumn, QBrush(QColor(51, 65, 85)));
@@ -1021,7 +1105,7 @@ void VideoBatchPage::rebuildPendingTree()
     const bool firstView = m_listedPaths.isEmpty();
     QTreeWidgetItem* group = ensurePendingGroup();
     group->setData(CheckColumn, kGroupBaseRole,
-                   firstView ? tr("待比对") : tr("新加入"));
+                   firstView ? tr("Waiting to compare") : tr("Newly added"));
     QTreeWidgetItem* first = nullptr;
     for (const int id : missing) {
         QTreeWidgetItem* item = createRowItem(id);
@@ -1112,7 +1196,7 @@ void VideoBatchPage::rebuildTree(const VideoBatchOutcome& outcome)
     }
     if (!notCompared.isEmpty()) {
         QTreeWidgetItem* group = ensurePendingGroup();
-        group->setData(CheckColumn, kGroupBaseRole, tr("待比对"));
+        group->setData(CheckColumn, kGroupBaseRole, tr("Waiting to compare"));
         QTreeWidgetItem* first = nullptr;
         for (const int id : notCompared) {
             if (QTreeWidgetItem* item = createRowItem(id)) {
@@ -1134,9 +1218,9 @@ void VideoBatchPage::rebuildTree(const VideoBatchOutcome& outcome)
 
 void VideoBatchPage::refreshGroupLabels()
 {
-    // Only the pending group is renamed here: its heading is "待比对" or "新加入"
-    // plus a live count. Result groups carry a label built from the verdict and
-    // the similarity, which the count says nothing about, so they are set once
+    // Only the pending group is renamed here: its heading is "waiting" or "newly
+    // added" plus a live count. Result groups carry a label built from the verdict
+    // and the similarity, which the count says nothing about, so they are set once
     // in rebuildTree and left alone.
     for (int i = m_tree->topLevelItemCount() - 1; i >= 0; --i) {
         QTreeWidgetItem* group = m_tree->topLevelItem(i);
@@ -1147,7 +1231,7 @@ void VideoBatchPage::refreshGroupLabels()
         if (base.isEmpty()) {
             continue;
         }
-        group->setText(CheckColumn, tr("%1 · %2 个").arg(base).arg(group->childCount()));
+        group->setText(CheckColumn, tr("%1 - %2 clips").arg(base).arg(group->childCount()));
     }
 }
 
@@ -1312,7 +1396,7 @@ void VideoBatchPage::removeItems(const QVector<QTreeWidgetItem*>& items)
         m_lastFailedCount = 0;
         m_progress->setRange(0, 1);
         m_progress->setValue(0);
-        m_progress->setFormat(tr("等待比对"));
+        m_progress->setFormat(tr("Waiting to compare"));
     }
     // Removing the clip that was ticked leaves a group with nothing ticked, which
     // no longer previews the keep policy; re-apply it.
@@ -1331,12 +1415,14 @@ void VideoBatchPage::setItemsChecked(const QVector<QTreeWidgetItem*>& items, boo
 void VideoBatchPage::deleteFiles(const QVector<QTreeWidgetItem*>& items)
 {
     if (items.isEmpty()) {
-        QMessageBox::information(this, tr("删除文件"), tr("请先选择或勾选要删除的视频。"));
+        QMessageBox::information(this, tr("Delete files"),
+                                 tr("Choose or check the videos to delete first."));
         return;
     }
     if (QMessageBox::question(
-            this, tr("删除文件"),
-            tr("将从磁盘永久删除 %1 个视频文件，是否继续？").arg(items.size()))
+            this, tr("Delete files"),
+            tr("This permanently deletes %1 video files from disk. Continue?")
+                .arg(items.size()))
         != QMessageBox::Yes) {
         return;
     }
@@ -1356,8 +1442,8 @@ void VideoBatchPage::deleteFiles(const QVector<QTreeWidgetItem*>& items)
     }
     removeItems(deleted);
     if (!errors.isEmpty()) {
-        QMessageBox::warning(this, tr("删除文件"),
-                             tr("以下 %1 个文件删除失败：\n%2")
+        QMessageBox::warning(this, tr("Delete files"),
+                             tr("These %1 files could not be deleted:\n%2")
                                  .arg(errors.size())
                                  .arg(errors.join(QLatin1Char('\n'))));
     }
@@ -1376,7 +1462,7 @@ void VideoBatchPage::clearList()
     m_lastFailedCount = 0;
     m_progress->setRange(0, 1);
     m_progress->setValue(0);
-    m_progress->setFormat(tr("等待比对"));
+    m_progress->setFormat(tr("Waiting to compare"));
     updateStatus();
 }
 
@@ -1457,7 +1543,8 @@ void VideoBatchPage::startCompare()
         }
     }
     if (paths.size() < 2) {
-        QMessageBox::information(this, tr("开始比对"), tr("至少需要两个视频才能比对。"));
+        QMessageBox::information(this, tr("Start comparison"),
+                                 tr("At least two videos are needed to compare."));
         return;
     }
 
@@ -1466,7 +1553,7 @@ void VideoBatchPage::startCompare()
     // the grouped results when they arrive.
     m_progress->setRange(0, 1);
     m_progress->setValue(0);
-    m_progress->setFormat(tr("准备中..."));
+    m_progress->setFormat(tr("Preparing..."));
 
     // No parent: moveToThread refuses an object that already has one, and the
     // QThread::finished -> deleteLater connection owns its lifetime instead.
@@ -1516,16 +1603,17 @@ void VideoBatchPage::onCompareFinished(VideoBatchOutcome outcome)
     m_progress->setValue(1);
 
     // Report the split because extraction is normally the bulk of the wait.
-    const qint64 totalMs = outcome.extractMs + outcome.compareMs;
-    m_progress->setFormat(tr("比对完成 · %1 个视频 · %2 · 重复组 %3 个 · 比对 %4 对")
+    m_lastTotalMs = outcome.extractMs + outcome.compareMs;
+    m_progress->setFormat(tr("Comparison finished - %1 clips - %2 - %3 duplicate groups - "
+                             "%4 pairs compared")
                               .arg(outcome.clipCount)
-                              .arg(formatutils::durationLabel(totalMs))
+                              .arg(formatutils::durationLabel(m_lastTotalMs))
                               .arg(m_lastDuplicateGroups)
                               .arg(outcome.pairsCompared));
     if (outcome.failedCount > 0) {
         QMessageBox::warning(
-            this, tr("部分视频无法读取"),
-            tr("有 %1 个视频无法读取，已跳过：\n%2")
+            this, tr("Some videos could not be read"),
+            tr("%1 videos could not be read and were skipped:\n%2")
                 .arg(outcome.failedCount)
                 .arg(outcome.failures.join(QLatin1Char('\n'))));
     }
@@ -1534,8 +1622,8 @@ void VideoBatchPage::onCompareFinished(VideoBatchOutcome outcome)
 
 void VideoBatchPage::onCompareFailed(const QString& message)
 {
-    m_progress->setFormat(tr("比对失败"));
-    QMessageBox::warning(this, tr("比对失败"), message);
+    m_progress->setFormat(tr("Comparison failed"));
+    QMessageBox::warning(this, tr("Comparison failed"), message);
     updateStatus();
 }
 
@@ -1570,16 +1658,16 @@ void VideoBatchPage::showProperties(const QVector<QTreeWidgetItem*>& items)
         return;
     }
     const QString details =
-        tr("名称：%1\n分辨率：%2\n时长：%3\n大小：%4\n修改日期：%5\n文件位置：%6")
+        tr("Name: %1\nResolution: %2\nDuration: %3\nSize: %4\nModified: %5\nLocation: %6")
             .arg(row->name)
             .arg(row->measured ? QStringLiteral("%1x%2").arg(row->width).arg(row->height)
-                               : tr("未读取"))
-            .arg(row->measured ? formatDuration(row->duration) : tr("未读取"))
+                               : tr("not read yet"))
+            .arg(row->measured ? formatDuration(row->duration) : tr("not read yet"))
             .arg(humanSize(row->fileSize))
             .arg(row->modifiedText)
             .arg(row->path);
     QMessageBox box(this);
-    box.setWindowTitle(tr("视频属性"));
+    box.setWindowTitle(tr("Video properties"));
     box.setIcon(QMessageBox::NoIcon);
     box.setText(details);
     box.exec();
@@ -1624,17 +1712,18 @@ void VideoBatchPage::showGroupContextMenu(QTreeWidgetItem* group, const QPoint& 
     const bool hasMembers = !members.isEmpty();
 
     QMenu menu(this);
-    QAction* expandAction = menu.addAction(group->isExpanded() ? tr("折叠分组") : tr("展开分组"));
+    QAction* expandAction =
+        menu.addAction(group->isExpanded() ? tr("Collapse this group") : tr("Expand this group"));
     menu.addSeparator();
-    QAction* checkAllAction = menu.addAction(tr("全选分组内视频"));
-    QAction* uncheckAllAction = menu.addAction(tr("取消全选分组内视频"));
+    QAction* checkAllAction = menu.addAction(tr("Check every clip in the group"));
+    QAction* uncheckAllAction = menu.addAction(tr("Uncheck every clip in the group"));
     menu.addSeparator();
-    QAction* openFirstAction = menu.addAction(tr("打开分组内第一个视频"));
-    QAction* folderAction = menu.addAction(tr("打开所在文件夹"));
+    QAction* openFirstAction = menu.addAction(tr("Open the first clip in the group"));
+    QAction* folderAction = menu.addAction(tr("Open containing folder"));
     menu.addSeparator();
-    QAction* removeAction = menu.addAction(tr("移出该分组"));
-    QAction* removeCheckedAction = menu.addAction(tr("移出分组内勾选项"));
-    QAction* deleteCheckedAction = menu.addAction(tr("删除分组内勾选文件"));
+    QAction* removeAction = menu.addAction(tr("Remove this group"));
+    QAction* removeCheckedAction = menu.addAction(tr("Remove the checked clips in the group"));
+    QAction* deleteCheckedAction = menu.addAction(tr("Delete the checked files in the group"));
 
     for (QAction* action : {checkAllAction, uncheckAllAction, openFirstAction, folderAction,
                             removeAction, removeCheckedAction, deleteCheckedAction}) {
@@ -1695,18 +1784,18 @@ void VideoBatchPage::showTreeContextMenu(const QPoint& position)
     }
 
     QMenu menu(this);
-    QAction* toggleAction = menu.addAction(tr("勾选 / 取消勾选"));
-    QAction* invertAction = menu.addAction(tr("反选"));
+    QAction* toggleAction = menu.addAction(tr("Check / uncheck"));
+    QAction* invertAction = menu.addAction(tr("Invert"));
     menu.addSeparator();
-    QAction* openAction = menu.addAction(tr("打开视频"));
-    QAction* copyAction = menu.addAction(tr("复制路径"));
-    QAction* propertyAction = menu.addAction(tr("属性查看"));
-    QAction* folderAction = menu.addAction(tr("打开文件所在文件夹"));
+    QAction* openAction = menu.addAction(tr("Open video"));
+    QAction* copyAction = menu.addAction(tr("Copy path"));
+    QAction* propertyAction = menu.addAction(tr("Properties"));
+    QAction* folderAction = menu.addAction(tr("Open containing folder"));
     menu.addSeparator();
-    QAction* removeAction = menu.addAction(tr("移出列表"));
-    QAction* deleteAction = menu.addAction(tr("删除文件"));
+    QAction* removeAction = menu.addAction(tr("Remove from list"));
+    QAction* deleteAction = menu.addAction(tr("Delete files"));
     menu.addSeparator();
-    QAction* compareAction = menu.addAction(tr("开始比对勾选视频"));
+    QAction* compareAction = menu.addAction(tr("Compare the checked videos"));
 
     QAction* chosen = menu.exec(m_tree->viewport()->mapToGlobal(position));
     if (chosen == toggleAction) {
@@ -1768,9 +1857,11 @@ void VideoBatchPage::updateStatus()
     // state, which makes it the one place that keeps the compare button honest.
     updateCompareButton();
 
-    QString text = tr("共 %1 个视频，已勾选 %2 个").arg(m_records.size()).arg(checkedItems().size());
+    QString text = tr("%1 videos, %2 checked")
+                       .arg(m_records.size())
+                       .arg(checkedItems().size());
     if (m_lastClipCount > 0) {
-        text += tr("，已比对 %1 个，重复组 %2 个")
+        text += tr(", %1 compared in %2 duplicate groups")
                     .arg(m_lastClipCount)
                     .arg(m_lastDuplicateGroups);
     }
@@ -1778,12 +1869,12 @@ void VideoBatchPage::updateStatus()
     // avoids the impression that the results already cover them.
     const int pending = unlistedPathCount();
     if (pending > 0) {
-        text += tr("，%1 个待比对").arg(pending);
+        text += tr(", %1 waiting to be compared").arg(pending);
     }
     if (m_lastFailedCount > 0) {
-        text += tr("，%1 个无法读取").arg(m_lastFailedCount);
+        text += tr(", %1 could not be read").arg(m_lastFailedCount);
     }
-    text += tr("，保留策略：%1").arg(m_policy->currentText());
+    text += tr(", keep policy: %1").arg(m_policy->currentText());
     m_status->setText(text);
 }
 

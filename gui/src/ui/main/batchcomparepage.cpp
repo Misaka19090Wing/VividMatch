@@ -103,7 +103,7 @@ QString fileTypeName(const QString& suffix)
     if (upper == QStringLiteral("JPG") || upper == QStringLiteral("JPEG")) {
         return QStringLiteral("JPEG");
     }
-    return upper.isEmpty() ? QStringLiteral("未知") : upper;
+    return upper.isEmpty() ? BatchComparePage::tr("Unknown") : upper;
 }
 
 } // namespace
@@ -268,6 +268,12 @@ BatchComparePage::BatchComparePage(QWidget* parent)
     , m_deleteButton(nullptr)
     , m_compareButton(nullptr)
     , m_status(new QLabel(this))
+    , m_backButton(nullptr)
+    , m_titleLabel(nullptr)
+    , m_addFolderButton(nullptr)
+    , m_addImagesButton(nullptr)
+    , m_policyLabel(nullptr)
+    , m_searchLabel(nullptr)
     , m_delegate(new BatchComparePage::BatchItemDelegate(this))
     , m_thumbnailRefresh(new QTimer(this))
     , m_thumbnailColumnWidth(82)
@@ -275,6 +281,7 @@ BatchComparePage::BatchComparePage(QWidget* parent)
     , m_nextRecordId(1)
     , m_hasCompared(false)
     , m_comparing(false)
+    , m_lastElapsedMs(0)
 {
     qRegisterMetaType<QVector<BatchCluster>>("QVector<BatchCluster>");
 
@@ -285,50 +292,46 @@ BatchComparePage::BatchComparePage(QWidget* parent)
     connect(m_thumbnailRefresh, &QTimer::timeout, this, &BatchComparePage::updateThumbnails);
 
     setAcceptDrops(true);
-    m_baseHeaders = {
-        tr("选中"), tr("缩略图"), tr("名称"), tr("分辨率"), tr("类型"),
-        tr("大小"), tr("修改日期"), tr("文件位置"), tr("位深度"),
-    };
 
     QVBoxLayout* root = new QVBoxLayout(this);
     root->setContentsMargins(24, 16, 24, 16);
     root->setSpacing(10);
 
     QHBoxLayout* header = new QHBoxLayout;
-    QPushButton* backButton = new QPushButton(tr("返回功能选择"), this);
-    backButton->setObjectName(QStringLiteral("secondaryButton"));
-    QLabel* title = new QLabel(tr("批量图片比对"), this);
-    title->setStyleSheet(QStringLiteral("font-size:20px;font-weight:600;color:#1f2937;"));
-    header->addWidget(backButton);
+    m_backButton = new QPushButton(this);
+    m_backButton->setObjectName(QStringLiteral("secondaryButton"));
+    m_titleLabel = new QLabel(this);
+    m_titleLabel->setStyleSheet(QStringLiteral("font-size:20px;font-weight:600;color:#1f2937;"));
+    header->addWidget(m_backButton);
     header->addSpacing(10);
-    header->addWidget(title);
+    header->addWidget(m_titleLabel);
     header->addStretch(1);
     root->addLayout(header);
-    connect(backButton, &QPushButton::released, this, &BatchComparePage::backRequested);
+    connect(m_backButton, &QPushButton::released, this, &BatchComparePage::backRequested);
 
-    QPushButton* addFolderButton = new QPushButton(tr("选择文件夹"), this);
-    addFolderButton->setObjectName(QStringLiteral("secondaryButton"));
-    QPushButton* addImagesButton = new QPushButton(tr("选择图片"), this);
-    addImagesButton->setObjectName(QStringLiteral("secondaryButton"));
-    m_invertButton = new QPushButton(tr("反选"), this);
+    m_addFolderButton = new QPushButton(this);
+    m_addFolderButton->setObjectName(QStringLiteral("secondaryButton"));
+    m_addImagesButton = new QPushButton(this);
+    m_addImagesButton->setObjectName(QStringLiteral("secondaryButton"));
+    m_invertButton = new QPushButton(this);
     m_invertButton->setObjectName(QStringLiteral("secondaryButton"));
-    m_removeButton = new QPushButton(tr("移出勾选项"), this);
+    m_removeButton = new QPushButton(this);
     m_removeButton->setObjectName(QStringLiteral("secondaryButton"));
-    m_deleteButton = new QPushButton(tr("删除勾选文件"), this);
+    m_deleteButton = new QPushButton(this);
     m_deleteButton->setObjectName(QStringLiteral("secondaryButton"));
-    m_compareButton = new QPushButton(tr("开始比对"), this);
+    m_compareButton = new QPushButton(this);
     m_compareButton->setObjectName(QStringLiteral("primaryButton"));
 
-    connect(addFolderButton, &QPushButton::released, this, &BatchComparePage::chooseFolder);
-    connect(addImagesButton, &QPushButton::released, this, &BatchComparePage::chooseImages);
+    connect(m_addFolderButton, &QPushButton::released, this, &BatchComparePage::chooseFolder);
+    connect(m_addImagesButton, &QPushButton::released, this, &BatchComparePage::chooseImages);
     connect(m_invertButton, &QPushButton::released, this, &BatchComparePage::invertChecked);
     connect(m_removeButton, &QPushButton::released, this, &BatchComparePage::removeChecked);
     connect(m_deleteButton, &QPushButton::released, this, &BatchComparePage::deleteCheckedFiles);
     connect(m_compareButton, &QPushButton::released, this, &BatchComparePage::startCompare);
 
     QHBoxLayout* controls = new QHBoxLayout;
-    controls->addWidget(addFolderButton);
-    controls->addWidget(addImagesButton);
+    controls->addWidget(m_addFolderButton);
+    controls->addWidget(m_addImagesButton);
     controls->addWidget(m_invertButton);
     controls->addSpacing(8);
     controls->addWidget(m_removeButton);
@@ -336,23 +339,26 @@ BatchComparePage::BatchComparePage(QWidget* parent)
     controls->addStretch(1);
     controls->addWidget(m_compareButton);
     controls->addSpacing(12);
-    controls->addWidget(new QLabel(tr("勾选策略"), this));
-    m_policy->addItem(tr("分辨率最高"), static_cast<int>(SelectionPolicy::HighestResolution));
-    m_policy->addItem(tr("分辨率最低"), static_cast<int>(SelectionPolicy::LowestResolution));
-    m_policy->addItem(tr("文件大小最大"), static_cast<int>(SelectionPolicy::LargestFile));
-    m_policy->addItem(tr("文件大小最小"), static_cast<int>(SelectionPolicy::SmallestFile));
-    m_policy->addItem(tr("修改日期最近"), static_cast<int>(SelectionPolicy::NewestModified));
-    m_policy->addItem(tr("修改日期最远"), static_cast<int>(SelectionPolicy::OldestModified));
-    m_policy->addItem(tr("位深度最高"), static_cast<int>(SelectionPolicy::HighestBitDepth));
-    m_policy->addItem(tr("位深度最低"), static_cast<int>(SelectionPolicy::LowestBitDepth));
-    m_policy->addItem(tr("不取消勾选"), static_cast<int>(SelectionPolicy::KeepAll));
+    m_policyLabel = new QLabel(this);
+    controls->addWidget(m_policyLabel);
+    // The items are added in retranslate(), where the texts can be replaced on a
+    // language switch; the data is what identifies each policy.
+    m_policy->addItem(QString(), static_cast<int>(SelectionPolicy::HighestResolution));
+    m_policy->addItem(QString(), static_cast<int>(SelectionPolicy::LowestResolution));
+    m_policy->addItem(QString(), static_cast<int>(SelectionPolicy::LargestFile));
+    m_policy->addItem(QString(), static_cast<int>(SelectionPolicy::SmallestFile));
+    m_policy->addItem(QString(), static_cast<int>(SelectionPolicy::NewestModified));
+    m_policy->addItem(QString(), static_cast<int>(SelectionPolicy::OldestModified));
+    m_policy->addItem(QString(), static_cast<int>(SelectionPolicy::HighestBitDepth));
+    m_policy->addItem(QString(), static_cast<int>(SelectionPolicy::LowestBitDepth));
+    m_policy->addItem(QString(), static_cast<int>(SelectionPolicy::KeepAll));
     m_policy->setCurrentIndex(0);
     controls->addWidget(m_policy);
     root->addLayout(controls);
 
     QHBoxLayout* searchRow = new QHBoxLayout;
-    searchRow->addWidget(new QLabel(tr("定位"), this));
-    m_search->setPlaceholderText(tr("Ctrl+F 搜索名称或路径"));
+    m_searchLabel = new QLabel(this);
+    searchRow->addWidget(m_searchLabel);
     m_search->setClearButtonEnabled(true);
     m_search->setMaximumWidth(280);
     m_search->hide();
@@ -361,12 +367,10 @@ BatchComparePage::BatchComparePage(QWidget* parent)
     searchRow->addWidget(m_progress, 1);
     m_progress->setRange(0, 1);
     m_progress->setValue(0);
-    m_progress->setFormat(tr("等待比对"));
     root->addLayout(searchRow);
     connect(m_search, &QLineEdit::textChanged, this, &BatchComparePage::searchChanged);
 
     m_tree->setColumnCount(ColumnCount);
-    m_tree->setHeaderLabels(m_baseHeaders);
     m_tree->setRootIsDecorated(true);
     m_tree->setItemsExpandable(true);
     m_tree->setExpandsOnDoubleClick(true);
@@ -382,10 +386,6 @@ BatchComparePage::BatchComparePage(QWidget* parent)
     m_tree->header()->setSectionsMovable(true);
     m_tree->header()->setSortIndicatorShown(false);
     m_tree->header()->setContextMenuPolicy(Qt::CustomContextMenu);
-    m_tree->header()->setToolTip(tr(
-        "单击：升序 / 降序 / 取消排序\n"
-        "Ctrl+单击：添加次级排序\n"
-        "右键表头：显示或隐藏列，也可拖动表头调整顺序"));
     m_tree->header()->setStretchLastSection(false);
     m_tree->header()->setMinimumSectionSize(kFallbackMinColumnWidth);
     m_tree->header()->resizeSection(CheckColumn, 42);
@@ -430,13 +430,91 @@ BatchComparePage::BatchComparePage(QWidget* parent)
         m_search->selectAll();
     });
 
-    updateStatus();
+    retranslate();
     updateMinimumColumnWidth();
+}
+
+void BatchComparePage::changeEvent(QEvent* event)
+{
+    if (event->type() == QEvent::LanguageChange) {
+        retranslate();
+    }
+    QWidget::changeEvent(event);
+}
+
+void BatchComparePage::retranslate()
+{
+    m_backButton->setText(tr("Back to mode selection"));
+    m_titleLabel->setText(tr("Batch image comparison"));
+    m_addFolderButton->setText(tr("Choose folder"));
+    m_addImagesButton->setText(tr("Choose images"));
+    m_invertButton->setText(tr("Invert"));
+    m_removeButton->setText(tr("Remove checked"));
+    m_deleteButton->setText(tr("Delete checked files"));
+    m_compareButton->setText(tr("Start comparison"));
+    m_policyLabel->setText(tr("Selection policy"));
+    m_searchLabel->setText(tr("Locate"));
+    m_search->setPlaceholderText(tr("Ctrl+F to search name or path"));
+
+    // Column headers. The user can hide and reorder columns, so the header keeps
+    // its layout and only the labels change.
+    m_baseHeaders = {
+        tr("Selected"),   tr("Thumbnail"), tr("Name"),     tr("Resolution"), tr("Type"),
+        tr("Size"),       tr("Modified"),  tr("Location"), tr("Bit depth"),
+    };
+    if (m_tree->headerItem() == nullptr) {
+        m_tree->setHeaderLabels(m_baseHeaders);
+    } else {
+        for (int i = 0; i < m_baseHeaders.size() && i < m_tree->columnCount(); ++i) {
+            m_tree->headerItem()->setText(i, m_baseHeaders.at(i));
+        }
+    }
+    m_tree->header()->setToolTip(
+        tr("Click: ascending / descending / unsorted\n"
+           "Ctrl+click: add a secondary sort field\n"
+           "Right-click: show or hide columns; drag headers to reorder"));
+
+    // The policy entries are re-labelled in place, matched by their data so the
+    // user's current choice survives.
+    struct PolicyText {
+        SelectionPolicy policy;
+        const char* text;
+    };
+    const PolicyText policies[] = {
+        {SelectionPolicy::HighestResolution, QT_TR_NOOP("Highest resolution")},
+        {SelectionPolicy::LowestResolution, QT_TR_NOOP("Lowest resolution")},
+        {SelectionPolicy::LargestFile, QT_TR_NOOP("Largest file")},
+        {SelectionPolicy::SmallestFile, QT_TR_NOOP("Smallest file")},
+        {SelectionPolicy::NewestModified, QT_TR_NOOP("Newest modified")},
+        {SelectionPolicy::OldestModified, QT_TR_NOOP("Oldest modified")},
+        {SelectionPolicy::HighestBitDepth, QT_TR_NOOP("Highest bit depth")},
+        {SelectionPolicy::LowestBitDepth, QT_TR_NOOP("Lowest bit depth")},
+        {SelectionPolicy::KeepAll, QT_TR_NOOP("Keep everything checked")},
+    };
+    for (const PolicyText& entry : policies) {
+        const int index = m_policy->findData(static_cast<int>(entry.policy));
+        if (index >= 0) {
+            m_policy->setItemText(index, tr(entry.text));
+        }
+    }
+
+    // Group headings and the status line are derived from state, so they are
+    // regenerated rather than stored.
+    refreshGroupLabels();
+    updateStatus();
+    if (m_hasCompared) {
+        // Same message as compareFinished(), rebuilt for the new language.
+        m_progress->setFormat(tr("Comparison finished - %1 images - %2")
+                                  .arg(m_records.size())
+                                  .arg(formatutils::durationLabel(m_lastElapsedMs)));
+    } else if (m_progress->value() == m_progress->minimum()) {
+        m_progress->setFormat(tr("Waiting to compare"));
+    }
 }
 
 void BatchComparePage::chooseFolder()
 {
-    const QString folder = QFileDialog::getExistingDirectory(this, tr("选择图片文件夹"));
+    const QString folder = QFileDialog::getExistingDirectory(this, tr("Choose an image folder"));
     if (folder.isEmpty()) {
         return;
     }
@@ -454,8 +532,8 @@ void BatchComparePage::chooseFolder()
 void BatchComparePage::chooseImages()
 {
     const QStringList paths = QFileDialog::getOpenFileNames(
-        this, tr("选择图片"), QString(),
-        tr("图片 (*.png *.jpg *.jpeg *.bmp *.webp);;所有文件 (*)"));
+        this, tr("Choose images"), QString(),
+        tr("Images (*.png *.jpg *.jpeg *.bmp *.webp);;All files (*)"));
     addImagePaths(paths);
 }
 
@@ -492,7 +570,7 @@ void BatchComparePage::startCompare()
     const QVector<QTreeWidgetItem*> checked = checkedItems();
     if (checked.size() < 2) {
         QMessageBox::information(
-            this, tr("开始比对"), tr("至少需要勾选两张图片才能比对。"));
+            this, tr("Start comparison"), tr("Select at least two images to compare."));
         return;
     }
 
@@ -535,7 +613,7 @@ void BatchComparePage::startCompare()
 
     m_progress->setRange(0, 1);
     m_progress->setValue(0);
-    m_progress->setFormat(tr("比对中..."));
+    m_progress->setFormat(tr("Comparing..."));
     m_thread->start();
 }
 
@@ -543,19 +621,21 @@ void BatchComparePage::compareFinished(QVector<BatchCluster> clusters, qint64 el
 {
     rebuildGroupedTree(std::move(clusters));
     m_compareRecordIds.clear();
+    m_hasCompared = true;
     m_progress->setRange(0, 1);
     m_progress->setValue(1);
     // The comparison time is part of the completion message, next to the count
     // of images it covered.
-    m_progress->setFormat(tr("比对完成 · %1 张 · %2")
+    m_lastElapsedMs = elapsedMs;
+    m_progress->setFormat(tr("Comparison finished - %1 images - %2")
                               .arg(m_records.size())
                               .arg(formatutils::durationLabel(elapsedMs)));
 }
 
 void BatchComparePage::compareFailed(const QString& message)
 {
-    m_progress->setFormat(tr("比对失败"));
-    QMessageBox::warning(this, tr("比对失败"), message);
+    m_progress->setFormat(tr("Comparison failed"));
+    QMessageBox::warning(this, tr("Comparison failed"), message);
 }
 
 void BatchComparePage::onProgressChanged(int done, int total)
@@ -663,7 +743,7 @@ void BatchComparePage::addImagePaths(const QStringList& paths)
     if (added > 0) {
         m_progress->setRange(0, 1);
         m_progress->setValue(0);
-        m_progress->setFormat(tr("已加入 %1 张，等待比对").arg(added));
+        m_progress->setFormat(tr("Added %1, waiting to compare").arg(added));
         applySort();
         refreshGroupLabels();
         // The new rows have no geometry yet, so the minimum is measured once
@@ -704,7 +784,7 @@ bool BatchComparePage::addImagePath(const QString& path, int& recordId)
     row.sizeText = humanSize(row.fileSize);
     row.modified = info.lastModified();
     row.modifiedText = row.modified.toString(QStringLiteral("yyyy-MM-dd HH:mm:ss"));
-    row.bitDepth = QStringLiteral("%1 位").arg(image.depth());
+    row.bitDepth = tr("%1 bit").arg(image.depth());
     row.width = image.width();
     row.height = image.height();
     row.depth = image.depth();
@@ -761,7 +841,7 @@ QTreeWidgetItem* BatchComparePage::createGroup(const QString& baseLabel)
 
 QTreeWidgetItem* BatchComparePage::ensureAddGroup()
 {
-    const QString wanted = m_hasCompared ? tr("新加入") : tr("待比对");
+    const QString wanted = m_hasCompared ? tr("Newly added") : tr("Waiting to compare");
     for (int i = m_tree->topLevelItemCount() - 1; i >= 0; --i) {
         QTreeWidgetItem* group = m_tree->topLevelItem(i);
         if (group->data(CheckColumn, kGroupBaseRole).toString() == wanted) {
@@ -801,7 +881,7 @@ void BatchComparePage::rebuildGroupedTree(QVector<BatchCluster> clusters)
         const SelectionPolicy policy = currentPolicy();
         const int winner = policy == SelectionPolicy::KeepAll ? -1 : chooseWinnerId(ids);
         QTreeWidgetItem* group = createGroup(
-            tr("相似组 · 相似度 %1%").arg(cluster.similarity * 100.0, 0, 'f', 1));
+            tr("Similar group - similarity %1%").arg(cluster.similarity * 100.0, 0, 'f', 1));
         for (const int id : ids) {
             group->addChild(createChildItem(id, policy == SelectionPolicy::KeepAll || id == winner));
         }
@@ -809,7 +889,7 @@ void BatchComparePage::rebuildGroupedTree(QVector<BatchCluster> clusters)
     }
 
     if (!singles.isEmpty()) {
-        QTreeWidgetItem* group = createGroup(tr("无相同图片"));
+        QTreeWidgetItem* group = createGroup(tr("No duplicates"));
         for (const int id : singles) {
             group->addChild(createChildItem(id, true));
         }
@@ -833,7 +913,7 @@ void BatchComparePage::refreshGroupLabels()
             continue;
         }
         const QString base = group->data(CheckColumn, kGroupBaseRole).toString();
-        group->setText(CheckColumn, tr("%1 · %2 张").arg(base).arg(count));
+        group->setText(CheckColumn, tr("%1 - %2 images").arg(base).arg(count));
     }
 }
 
@@ -934,13 +1014,15 @@ void BatchComparePage::setItemsChecked(const QVector<QTreeWidgetItem*>& items, b
 void BatchComparePage::deleteFiles(const QVector<QTreeWidgetItem*>& items)
 {
     if (items.isEmpty()) {
-        QMessageBox::information(this, tr("删除文件"), tr("请先选择或勾选要删除的图片。"));
+        QMessageBox::information(this, tr("Delete files"),
+                                 tr("Select or check the images to delete first."));
         return;
     }
 
     if (QMessageBox::question(
-            this, tr("删除文件"),
-            tr("将从磁盘永久删除 %1 个图片文件，是否继续？").arg(items.size()))
+            this, tr("Delete files"),
+            tr("This permanently deletes %1 image files from disk. Continue?")
+                .arg(items.size()))
         != QMessageBox::Yes) {
         return;
     }
@@ -958,8 +1040,10 @@ void BatchComparePage::deleteFiles(const QVector<QTreeWidgetItem*>& items)
     removeItems(deleted);
     if (!errors.isEmpty()) {
         QMessageBox::warning(
-            this, tr("删除文件"),
-            tr("以下 %1 个文件删除失败：\n%2").arg(errors.size()).arg(errors.join('\n')));
+            this, tr("Delete files"),
+            tr("These %1 files could not be deleted:\n%2")
+                .arg(errors.size())
+                .arg(errors.join(QLatin1Char('\n'))));
     }
 }
 
@@ -1070,17 +1154,17 @@ void BatchComparePage::showTreeContextMenu(const QPoint& position)
     }
 
     QMenu menu(this);
-    QAction* toggleAction = menu.addAction(tr("勾选 / 取消勾选"));
-    QAction* invertAction = menu.addAction(tr("反选"));
+    QAction* toggleAction = menu.addAction(tr("Check / uncheck"));
+    QAction* invertAction = menu.addAction(tr("Invert"));
     menu.addSeparator();
-    QAction* removeAction = menu.addAction(tr("移出列表"));
-    QAction* deleteAction = menu.addAction(tr("删除文件"));
+    QAction* removeAction = menu.addAction(tr("Remove from list"));
+    QAction* deleteAction = menu.addAction(tr("Delete files"));
     menu.addSeparator();
-    QAction* copyAction = menu.addAction(tr("复制"));
-    QAction* propertyAction = menu.addAction(tr("属性查看"));
-    QAction* folderAction = menu.addAction(tr("打开文件所在文件夹"));
+    QAction* copyAction = menu.addAction(tr("Copy"));
+    QAction* propertyAction = menu.addAction(tr("Properties"));
+    QAction* folderAction = menu.addAction(tr("Open containing folder"));
     menu.addSeparator();
-    QAction* compareAction = menu.addAction(tr("开始比对勾选图片"));
+    QAction* compareAction = menu.addAction(tr("Compare the checked images"));
 
     QAction* chosen = menu.exec(m_tree->viewport()->mapToGlobal(position));
     if (chosen == toggleAction) {
@@ -1115,23 +1199,23 @@ void BatchComparePage::buildGroupMenu(QMenu& menu, const QTreeWidgetItem* group)
     };
 
     add(GroupAction::ToggleExpand,
-        group->isExpanded() ? tr("折叠分组") : tr("展开分组"));
-    add(GroupAction::ExpandAll, tr("全部展开"));
-    add(GroupAction::CollapseAll, tr("全部折叠"));
+        group->isExpanded() ? tr("Collapse this group") : tr("Expand this group"));
+    add(GroupAction::ExpandAll, tr("Expand all"));
+    add(GroupAction::CollapseAll, tr("Collapse all"));
     menu.addSeparator();
-    add(GroupAction::CheckAll, tr("全选分组内图片"));
-    add(GroupAction::UncheckAll, tr("取消全选分组内图片"));
-    add(GroupAction::InvertChecked, tr("反选分组内图片"));
-    add(GroupAction::KeepOnlyBest, tr("仅保留策略最优图片"));
+    add(GroupAction::CheckAll, tr("Check every image in the group"));
+    add(GroupAction::UncheckAll, tr("Uncheck every image in the group"));
+    add(GroupAction::InvertChecked, tr("Invert the group"));
+    add(GroupAction::KeepOnlyBest, tr("Keep only the policy-best image"));
     menu.addSeparator();
-    add(GroupAction::OpenAll, tr("打开分组内全部图片"));
-    add(GroupAction::OpenFolder, tr("打开文件所在文件夹"));
+    add(GroupAction::OpenAll, tr("Open every image in the group"));
+    add(GroupAction::OpenFolder, tr("Open containing folder"));
     menu.addSeparator();
-    add(GroupAction::RemoveGroup, tr("移出该分组"));
-    add(GroupAction::RemoveChecked, tr("移出分组内勾选项"));
-    add(GroupAction::DeleteChecked, tr("删除分组内勾选文件"));
+    add(GroupAction::RemoveGroup, tr("Remove this group"));
+    add(GroupAction::RemoveChecked, tr("Remove the checked images in the group"));
+    add(GroupAction::DeleteChecked, tr("Delete the checked files in the group"));
     menu.addSeparator();
-    add(GroupAction::Compare, tr("开始比对勾选图片"));
+    add(GroupAction::Compare, tr("Compare the checked images"));
 
     // A group with no pictures left has nothing to act on, and "keep only the
     // best" is meaningless while the policy is "keep everything".
@@ -1369,8 +1453,8 @@ void BatchComparePage::updateStatus()
                               .arg(rule.order == Qt::AscendingOrder ? QStringLiteral("↑")
                                                                     : QStringLiteral("↓")));
     }
-    const QString sortText = sortLabels.isEmpty() ? tr("无") : sortLabels.join(QStringLiteral(" > "));
-    m_status->setText(tr("共 %1 张图片，已勾选 %2 张，排序：%3，勾选策略：%4")
+    const QString sortText = sortLabels.isEmpty() ? tr("none") : sortLabels.join(QStringLiteral(" > "));
+    m_status->setText(tr("%1 images, %2 checked, sorted by: %3, selection policy: %4")
                           .arg(m_records.size())
                           .arg(checkedItems().size())
                           .arg(sortText)
@@ -1520,7 +1604,8 @@ void BatchComparePage::showProperties(const QVector<QTreeWidgetItem*>& items)
         return;
     }
     const QString details =
-        tr("名称：%1\n分辨率：%2\n类型：%3\n大小：%4\n修改日期：%5\n文件位置：%6\n位深度：%7")
+        tr("Name: %1\nResolution: %2\nType: %3\nSize: %4\nModified: %5\nLocation: %6\n"
+           "Bit depth: %7")
             .arg(row->name)
             .arg(row->resolution)
             .arg(row->type)
@@ -1529,7 +1614,7 @@ void BatchComparePage::showProperties(const QVector<QTreeWidgetItem*>& items)
             .arg(row->path)
             .arg(row->bitDepth);
     QMessageBox box(this);
-    box.setWindowTitle(tr("图片属性"));
+    box.setWindowTitle(tr("Image properties"));
     box.setIcon(QMessageBox::NoIcon);
     box.setText(details);
     box.exec();

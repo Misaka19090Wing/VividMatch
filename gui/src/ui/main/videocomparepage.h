@@ -62,6 +62,8 @@ protected:
     void dragEnterEvent(QDragEnterEvent* event) override;
     void dropEvent(QDropEvent* event) override;
     void resizeEvent(QResizeEvent* event) override;
+    // Qt sends LanguageChange when a translator is installed or removed.
+    void changeEvent(QEvent* event) override;
 
 private slots:
     void chooseFirstVideo();
@@ -88,6 +90,11 @@ private:
     void resetResult();
     void showResult(const vividmatch::VideoComparison& comparison, qint64 extractionMs);
     void setBusy(bool busy);
+    void retranslate();
+    // Rebuilds the verdict and metrics text in the current language. Those strings
+    // embed the numbers, so they are regenerated from the stored result instead of
+    // being re-translated.
+    void refreshResultText();
 
     QLabel* m_firstPreview;
     QLabel* m_secondPreview;
@@ -108,6 +115,20 @@ private:
     QPointer<QThread> m_thread;
     VideoCompareWorker* m_worker;
     bool m_busy;
+
+    // Kept so a language switch can rewrite them.
+    QPushButton* m_backButton;
+    QLabel* m_titleLabel;
+    QLabel* m_firstSideLabel;
+    QLabel* m_secondSideLabel;
+    QPushButton* m_firstButton;
+    QPushButton* m_secondButton;
+    QLabel* m_thresholdLabel;
+
+    // Last result, re-rendered on a language switch.
+    bool m_hasResult;
+    vividmatch::VideoComparison m_result;
+    qint64 m_extractionMs;
 };
 
 #endif  // VIDEOCOMPAREPAGE_H

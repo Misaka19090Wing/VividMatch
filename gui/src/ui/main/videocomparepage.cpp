@@ -116,17 +116,17 @@ QString verdictLabel(vividmatch::VideoVerdict verdict)
 {
     switch (verdict) {
         case vividmatch::VideoVerdict::Identical:
-            return QStringLiteral("判定：相同视频");
+            return VideoComparePage::tr("Verdict: the same video");
         case vividmatch::VideoVerdict::Reencoded:
-            return QStringLiteral("判定：画面相同，音频不同（二次创作）");
+            return VideoComparePage::tr("Verdict: same picture, different audio (a re-cut)");
         case vividmatch::VideoVerdict::Montage:
-            return QStringLiteral("判定：混剪拼接（时间轴跳跃）");
+            return VideoComparePage::tr("Verdict: spliced together (the timeline jumps)");
         case vividmatch::VideoVerdict::Partial:
-            return QStringLiteral("判定：部分相同");
+            return VideoComparePage::tr("Verdict: partly the same");
         case vividmatch::VideoVerdict::Different:
-            return QStringLiteral("判定：不同视频");
+            return VideoComparePage::tr("Verdict: different videos");
     }
-    return QStringLiteral("判定：未知");
+    return VideoComparePage::tr("Verdict: unknown");
 }
 
 QString verdictColour(vividmatch::VideoVerdict verdict)
@@ -148,15 +148,22 @@ QString verdictExplanation(vividmatch::VideoVerdict verdict)
 {
     switch (verdict) {
         case vividmatch::VideoVerdict::Identical:
-            return QStringLiteral("较短视频被一整条单调链匹配，画面与时序一致。");
+            return VideoComparePage::tr(
+                "The shorter video is matched by one monotonic chain, so picture and "
+                "timing agree.");
         case vividmatch::VideoVerdict::Reencoded:
-            return QStringLiteral("画面高匹配但音轨不同，判为替换 BGM 的二次创作。");
+            return VideoComparePage::tr(
+                "The picture matches closely but the soundtrack does not, so the music "
+                "bed was replaced.");
         case vividmatch::VideoVerdict::Montage:
-            return QStringLiteral("匹配到的画面对不上同一条时间轴，判为混剪或倒放。");
+            return VideoComparePage::tr(
+                "The matched pictures do not sit on one timeline, so this is spliced "
+                "together or played backwards.");
         case vividmatch::VideoVerdict::Partial:
-            return QStringLiteral("匹配有序但覆盖不足，只算部分相同。");
+            return VideoComparePage::tr(
+                "The matches are in order but do not cover enough of the clip.");
         case vividmatch::VideoVerdict::Different:
-            return QStringLiteral("没有采样帧匹配。");
+            return VideoComparePage::tr("No sampled frame matched.");
     }
     return QString();
 }
@@ -166,30 +173,35 @@ QString verdictExplanation(vividmatch::VideoVerdict verdict)
 QString audioLayerNote(const vividmatch::AudioComparison& audio)
 {
     if (audio.available) {
-        return QStringLiteral("音频：比对 %1 秒，相似度 %2%（RMS 差 %3）→ %4")
+        return VideoComparePage::tr("Audio: compared %1 s, similarity %2% (RMS difference "
+                                    "%3) -> %4")
             .arg(audio.comparedSeconds)
             .arg(audio.meanSimilarity * 100.0, 0, 'f', 1)
             .arg(audio.meanRmsDifference, 0, 'f', 3)
-            .arg(audio.sameSoundtrack ? QStringLiteral("同一条音轨")
-                                      : QStringLiteral("音轨不同"));
+            .arg(audio.sameSoundtrack ? VideoComparePage::tr("the same soundtrack")
+                                      : VideoComparePage::tr("different soundtracks"));
     }
 
     const QString reason = QString::fromStdString(audio.error);
     QString explained;
     if (reason.contains(QStringLiteral("no audio track"))) {
-        explained = QStringLiteral("至少一段视频没有音轨，只看画面");
+        explained = VideoComparePage::tr("at least one clip has no audio track, so only "
+                                         "the picture was compared");
     } else if (reason.contains(QStringLiteral("ffmpeg not found"))) {
-        explained = QStringLiteral("未找到 ffmpeg，装好并加入 PATH 后可启用音频比对");
+        explained = VideoComparePage::tr("ffmpeg was not found; install it and add it to "
+                                         "PATH to enable audio comparison");
     } else if (reason.contains(QStringLiteral("could not be read"))) {
-        explained = QStringLiteral("音轨读取失败（文件损坏或容器不受支持）");
+        explained = VideoComparePage::tr("the audio track could not be read (damaged file "
+                                         "or unsupported container)");
     } else if (reason.contains(QStringLiteral("no aligned frames"))) {
-        explained = QStringLiteral("画面没有对齐的片段，无从比对音频");
+        explained = VideoComparePage::tr("the pictures never aligned, so there was nothing "
+                                         "to compare the audio over");
     } else if (reason.isEmpty()) {
-        explained = QStringLiteral("本次未启用");
+        explained = VideoComparePage::tr("not enabled for this run");
     } else {
         explained = reason;
     }
-    return QStringLiteral("音频：未参与（%1）").arg(explained);
+    return VideoComparePage::tr("Audio: not used (%1)").arg(explained);
 }
 
 }  // namespace
@@ -222,8 +234,8 @@ void VideoCompareWorker::run()
             m_firstPath.toStdString(), m_secondPath.toStdString(), left, right,
             m_includeAudio, std::string(), [this](const std::string& stage) {
                 const QString message = stage == "extracting audio fingerprints"
-                                            ? tr("正在提取音频指纹（ffmpeg）...")
-                                            : tr("正在提取视频指纹...");
+                                            ? tr("Extracting the audio fingerprint (ffmpeg)...")
+                                            : tr("Extracting the video fingerprint...");
                 QMetaObject::invokeMethod(
                     this, [this, message]() { emit progress(message); },
                     Qt::QueuedConnection);
@@ -231,7 +243,7 @@ void VideoCompareWorker::run()
 
         const qint64 extractionMs = extractionTimer.elapsed();
 
-        emit progress(tr("正在比对..."));
+        emit progress(tr("Comparing..."));
         vividmatch::VideoComparison comparison =
             vividmatch::compareVideoFingerprints(left, right, m_frameThreshold);
         emit finished(comparison, extractionMs);
@@ -267,14 +279,14 @@ VideoComparePage::VideoComparePage(QWidget* parent)
     root->setSpacing(14);
 
     QHBoxLayout* header = new QHBoxLayout;
-    QPushButton* backButton = new QPushButton(tr("返回功能选择"), this);
-    backButton->setObjectName(QStringLiteral("secondaryButton"));
-    connect(backButton, &QPushButton::released, this, &VideoComparePage::backRequested);
-    QLabel* title = new QLabel(tr("视频比对模式"), this);
-    title->setStyleSheet(QStringLiteral("font-size:20px;font-weight:600;color:#1f2937;"));
-    header->addWidget(backButton);
+    m_backButton = new QPushButton(this);
+    m_backButton->setObjectName(QStringLiteral("secondaryButton"));
+    connect(m_backButton, &QPushButton::released, this, &VideoComparePage::backRequested);
+    m_titleLabel = new QLabel(this);
+    m_titleLabel->setStyleSheet(QStringLiteral("font-size:20px;font-weight:600;color:#1f2937;"));
+    header->addWidget(m_backButton);
     header->addSpacing(10);
-    header->addWidget(title);
+    header->addWidget(m_titleLabel);
     header->addStretch(1);
     root->addLayout(header);
 
@@ -292,23 +304,21 @@ VideoComparePage::VideoComparePage(QWidget* parent)
 
     m_firstPreview = makePreview();
     m_secondPreview = makePreview();
-    m_firstPreview->setText(tr("未选择视频一"));
-    m_secondPreview->setText(tr("未选择视频二"));
 
-    m_firstInfo = new QLabel(tr("支持 mp4 / mov / mkv / avi / webm"), this);
-    m_secondInfo = new QLabel(tr("支持 mp4 / mov / mkv / avi / webm"), this);
+    m_firstInfo = new QLabel(this);
+    m_secondInfo = new QLabel(this);
     for (QLabel* info : {m_firstInfo, m_secondInfo}) {
         info->setAlignment(Qt::AlignCenter);
         info->setStyleSheet(QStringLiteral("color:#6b7280;"));
     }
 
-    auto makeColumn = [this](const QString& sideTitle, QLabel* preview, QLabel* info,
+    auto makeColumn = [this](QLabel* side, QLabel* preview, QLabel* info,
                              QPushButton* chooseButton) {
         QWidget* column = new QWidget(this);
         QVBoxLayout* layout = new QVBoxLayout(column);
         layout->setContentsMargins(0, 0, 0, 0);
         layout->setSpacing(8);
-        QLabel* side = new QLabel(sideTitle, column);
+        side->setParent(column);
         side->setStyleSheet(QStringLiteral("font-weight:600;color:#334155;"));
         layout->addWidget(side);
         layout->addWidget(preview, 0, Qt::AlignHCenter);
@@ -317,25 +327,29 @@ VideoComparePage::VideoComparePage(QWidget* parent)
         return column;
     };
 
-    QPushButton* firstButton = new QPushButton(tr("选择视频一"), this);
-    firstButton->setObjectName(QStringLiteral("secondaryButton"));
-    QPushButton* secondButton = new QPushButton(tr("选择视频二"), this);
-    secondButton->setObjectName(QStringLiteral("secondaryButton"));
-    connect(firstButton, &QPushButton::released, this, &VideoComparePage::chooseFirstVideo);
-    connect(secondButton, &QPushButton::released, this, &VideoComparePage::chooseSecondVideo);
+    m_firstSideLabel = new QLabel(this);
+    m_secondSideLabel = new QLabel(this);
+    m_firstButton = new QPushButton(this);
+    m_firstButton->setObjectName(QStringLiteral("secondaryButton"));
+    m_secondButton = new QPushButton(this);
+    m_secondButton->setObjectName(QStringLiteral("secondaryButton"));
+    connect(m_firstButton, &QPushButton::released, this, &VideoComparePage::chooseFirstVideo);
+    connect(m_secondButton, &QPushButton::released, this, &VideoComparePage::chooseSecondVideo);
 
     QHBoxLayout* videoRow = new QHBoxLayout;
     videoRow->setSpacing(22);
     videoRow->addStretch(1);
-    videoRow->addWidget(makeColumn(tr("视频一"), m_firstPreview, m_firstInfo, firstButton));
     videoRow->addWidget(
-        makeColumn(tr("视频二"), m_secondPreview, m_secondInfo, secondButton));
+        makeColumn(m_firstSideLabel, m_firstPreview, m_firstInfo, m_firstButton));
+    videoRow->addWidget(
+        makeColumn(m_secondSideLabel, m_secondPreview, m_secondInfo, m_secondButton));
     videoRow->addStretch(1);
     root->addLayout(videoRow);
 
     QHBoxLayout* compareRow = new QHBoxLayout;
     compareRow->addStretch(1);
-    compareRow->addWidget(new QLabel(tr("帧匹配阈值"), this));
+    m_thresholdLabel = new QLabel(this);
+    compareRow->addWidget(m_thresholdLabel);
     m_threshold = new QDoubleSpinBox(this);
     m_threshold->setRange(0.50, 0.99);
     m_threshold->setDecimals(2);
@@ -343,11 +357,11 @@ VideoComparePage::VideoComparePage(QWidget* parent)
     m_threshold->setValue(vividmatch::kDefaultFrameThreshold);
     compareRow->addWidget(m_threshold);
     compareRow->addSpacing(14);
-    m_audioCheck = new QCheckBox(tr("比对音频（需要 ffmpeg）"), this);
+    m_audioCheck = new QCheckBox(this);
     m_audioCheck->setChecked(true);
     compareRow->addWidget(m_audioCheck);
     compareRow->addSpacing(14);
-    m_compareButton = new QPushButton(tr("开始比对"), this);
+    m_compareButton = new QPushButton(this);
     m_compareButton->setObjectName(QStringLiteral("primaryButton"));
     m_compareButton->setEnabled(false);
     connect(m_compareButton, &QPushButton::released, this, &VideoComparePage::startCompare);
@@ -365,7 +379,7 @@ VideoComparePage::VideoComparePage(QWidget* parent)
     QVBoxLayout* resultLayout = new QVBoxLayout(resultPanel);
     resultLayout->setContentsMargins(18, 14, 18, 14);
     resultLayout->setSpacing(6);
-    m_verdict = new QLabel(tr("等待比对"), resultPanel);
+    m_verdict = new QLabel(resultPanel);
     m_verdict->setObjectName(QStringLiteral("verdict"));
     m_verdictDetail = new QLabel(QString(), resultPanel);
     m_metrics = new QLabel(QString(), resultPanel);
@@ -379,9 +393,56 @@ VideoComparePage::VideoComparePage(QWidget* parent)
     m_progress = new QProgressBar(this);
     m_progress->setRange(0, 1);
     m_progress->setValue(0);
-    m_progress->setFormat(tr("等待比对"));
     root->addWidget(m_progress);
     root->addStretch(1);
+
+    retranslate();
+}
+
+void VideoComparePage::changeEvent(QEvent* event)
+{
+    if (event->type() == QEvent::LanguageChange) {
+        retranslate();
+    }
+    QWidget::changeEvent(event);
+}
+
+void VideoComparePage::retranslate()
+{
+    m_backButton->setText(tr("Back to mode selection"));
+    m_titleLabel->setText(tr("Video comparison mode"));
+
+    m_firstSideLabel->setText(tr("Video one"));
+    m_secondSideLabel->setText(tr("Video two"));
+    m_firstButton->setText(tr("Choose video one"));
+    m_secondButton->setText(tr("Choose video two"));
+    m_thresholdLabel->setText(tr("Frame match threshold"));
+    m_audioCheck->setText(tr("Compare audio (needs ffmpeg)"));
+    m_compareButton->setText(tr("Start comparison"));
+
+    // Before a clip is chosen the info line is the supported-formats hint; after,
+    // it carries that clip's own measurements.
+    const QString hint = tr("Supports mp4 / mov / mkv / avi / webm");
+    if (m_firstPath.isEmpty()) {
+        m_firstPreview->setText(tr("No video one chosen"));
+        m_firstInfo->setText(hint);
+    }
+    if (m_secondPath.isEmpty()) {
+        m_secondPreview->setText(tr("No video two chosen"));
+        m_secondInfo->setText(hint);
+    }
+
+    // The state labels are derived from what the page is currently doing rather
+    // than stored, so they cannot go stale in the other language.
+    if (m_busy) {
+        m_verdict->setText(m_progress->format());
+    } else if (!m_hasResult) {
+        m_verdict->setText(tr("Waiting to compare"));
+    }
+    if (!m_busy && !m_hasResult) {
+        m_progress->setFormat(tr("Waiting to compare"));
+    }
+    refreshResultText();
 }
 
 void VideoComparePage::chooseFirstVideo() { chooseVideo(0); }
@@ -391,8 +452,8 @@ void VideoComparePage::chooseSecondVideo() { chooseVideo(1); }
 void VideoComparePage::chooseVideo(int slot)
 {
     const QString path = QFileDialog::getOpenFileName(
-        this, tr("选择视频"), QString(),
-        tr("视频 (*.mp4 *.mov *.mkv *.avi *.webm *.m4v);;所有文件 (*)"));
+        this, tr("Choose a video"), QString(),
+        tr("Videos (*.mp4 *.mov *.mkv *.avi *.webm *.m4v);;All files (*)"));
     if (path.isEmpty()) {
         return;
     }
@@ -404,8 +465,8 @@ void VideoComparePage::setVideoPath(int slot, const QString& path)
     QImage frame;
     QString info;
     if (!loadVideoSummary(path, frame, info)) {
-        QMessageBox::warning(this, tr("无法读取视频"),
-                             tr("无法打开视频文件：\n%1").arg(path));
+        QMessageBox::warning(this, tr("Cannot read the video"),
+                             tr("Cannot open the video file:\n%1").arg(path));
         return;
     }
 
@@ -448,13 +509,14 @@ void VideoComparePage::refreshPreviews()
 
 void VideoComparePage::resetResult()
 {
-    m_verdict->setText(tr("等待比对"));
+    m_hasResult = false;
+    m_verdict->setText(tr("Waiting to compare"));
     m_verdict->setStyleSheet(QString());
     m_verdictDetail->clear();
     m_metrics->clear();
     m_progress->setRange(0, 1);
     m_progress->setValue(0);
-    m_progress->setFormat(tr("等待比对"));
+    m_progress->setFormat(tr("Waiting to compare"));
 }
 
 void VideoComparePage::setBusy(bool busy)
@@ -475,12 +537,13 @@ void VideoComparePage::startCompare()
     }
 
     setBusy(true);
-    m_verdict->setText(tr("比对中..."));
+    m_hasResult = false;
+    m_verdict->setText(tr("Comparing..."));
     m_verdict->setStyleSheet(QString());
     m_verdictDetail->clear();
     m_metrics->clear();
     m_progress->setRange(0, 0);
-    m_progress->setFormat(tr("比对中..."));
+    m_progress->setFormat(tr("Comparing..."));
 
     m_worker = new VideoCompareWorker(m_firstPath, m_secondPath, m_threshold->value(),
                                       m_audioCheck->isChecked());
@@ -515,12 +578,13 @@ void VideoComparePage::onCompareFinished(vividmatch::VideoComparison comparison,
 
 void VideoComparePage::onCompareFailed(const QString& message)
 {
-    m_verdict->setText(tr("比对失败"));
+    m_hasResult = false;
+    m_verdict->setText(tr("Comparison failed"));
     m_verdict->setStyleSheet(QStringLiteral("color:#b91c1c;font-size:18px;font-weight:700;"));
     m_verdictDetail->setText(message);
     m_progress->setRange(0, 1);
     m_progress->setValue(0);
-    m_progress->setFormat(tr("比对失败"));
+    m_progress->setFormat(tr("Comparison failed"));
 }
 
 void VideoComparePage::onThreadFinished()
@@ -529,13 +593,32 @@ void VideoComparePage::onThreadFinished()
     if (m_progress->maximum() == 0) {
         m_progress->setRange(0, 1);
         m_progress->setValue(1);
-        m_progress->setFormat(tr("比对完成"));
+        m_progress->setFormat(tr("Comparison finished"));
     }
 }
 
 void VideoComparePage::showResult(const vividmatch::VideoComparison& comparison,
                                   qint64 extractionMs)
 {
+    // Remembered so a language switch can rebuild this panel: the text embeds
+    // numbers, so it is regenerated rather than re-translated.
+    m_hasResult = true;
+    m_result = comparison;
+    m_extractionMs = extractionMs;
+    refreshResultText();
+}
+
+void VideoComparePage::refreshResultText()
+{
+    if (!m_hasResult) {
+        m_verdict->setText(tr("Waiting to compare"));
+        m_verdict->setStyleSheet(QString());
+        m_verdictDetail->clear();
+        m_metrics->clear();
+        return;
+    }
+
+    const vividmatch::VideoComparison& comparison = m_result;
     m_verdict->setText(verdictLabel(comparison.verdict));
     m_verdict->setStyleSheet(
         QStringLiteral("color:%1;font-size:18px;font-weight:700;")
@@ -543,15 +626,15 @@ void VideoComparePage::showResult(const vividmatch::VideoComparison& comparison,
     m_verdictDetail->setText(verdictExplanation(comparison.verdict));
 
     QStringList lines;
-    lines << tr("视觉：采样 %1 / %2 帧，匹配 %3 对，单调链 %4 帧")
+    lines << tr("Picture: sampled %1 / %2 frames, %3 matched pairs, chain of %4")
                  .arg(comparison.leftFrames)
                  .arg(comparison.rightFrames)
                  .arg(comparison.matches.size())
                  .arg(comparison.monotonicRun);
-    lines << tr("时序：覆盖 %1%，链完整度 %2%")
+    lines << tr("Timing: coverage %1%, chain completeness %2%")
                  .arg(comparison.coverage * 100.0, 0, 'f', 1)
                  .arg(comparison.runRatio * 100.0, 0, 'f', 1);
-    lines << tr("帧相似度：平均 %1%（最佳 %2%，阈值 %3）")
+    lines << tr("Frame similarity: mean %1% (best %2%, threshold %3)")
                  .arg(comparison.meanScore * 100.0, 0, 'f', 1)
                  .arg(comparison.bestMatchScore * 100.0, 0, 'f', 1)
                  .arg(comparison.frameThreshold, 0, 'f', 2);
@@ -561,10 +644,10 @@ void VideoComparePage::showResult(const vividmatch::VideoComparison& comparison,
     // Timing is split by stage. Extraction is normally the bulk of the wait, and
     // its stage times overlap each other, so it is reported as the wall time the
     // worker measured rather than as a sum.
-    const qint64 overallMs = extractionMs + static_cast<qint64>(comparison.elapsedMs);
-    lines << tr("用时：合计 %1（提取指纹 %2，比对 %3）")
+    const qint64 overallMs = m_extractionMs + static_cast<qint64>(comparison.elapsedMs);
+    lines << tr("Time: %1 in total (fingerprints %2, comparison %3)")
                  .arg(formatutils::durationValue(overallMs))
-                 .arg(formatutils::durationValue(extractionMs))
+                 .arg(formatutils::durationValue(m_extractionMs))
                  .arg(formatutils::durationValue(static_cast<qint64>(comparison.elapsedMs)));
 
     m_metrics->setText(lines.join(QLatin1Char('\n')));

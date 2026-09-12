@@ -39,6 +39,8 @@ protected:
     bool eventFilter(QObject* watched, QEvent* event) override;
     void dragEnterEvent(QDragEnterEvent* event) override;
     void dropEvent(QDropEvent* event) override;
+    // Qt sends LanguageChange when a translator is installed or removed.
+    void changeEvent(QEvent* event) override;
 
 public:
     enum Column {
@@ -146,6 +148,9 @@ private:
     void addRecordToDisplay(int recordId);
     void rebuildGroupedTree(QVector<BatchCluster> clusters);
     void refreshGroupLabels();
+    // Re-applies every visible string; called from retranslate() and whenever a
+    // group is created, so the headings follow the language too.
+    void retranslate();
     QVector<QTreeWidgetItem*> allChildItems() const;
     bool isGroupItem(const QTreeWidgetItem* item) const;
     QVector<QTreeWidgetItem*> groupChildren(const QTreeWidgetItem* group) const;
@@ -188,6 +193,14 @@ private:
     QPushButton* m_compareButton;
     QLabel* m_status;
 
+    // Kept so a language switch can rewrite them.
+    QPushButton* m_backButton;
+    QLabel* m_titleLabel;
+    QPushButton* m_addFolderButton;
+    QPushButton* m_addImagesButton;
+    QLabel* m_policyLabel;
+    QLabel* m_searchLabel;
+
     QHash<int, RowData> m_records;
     QVector<int> m_compareRecordIds;
     QVector<SortRule> m_sortRules;
@@ -200,6 +213,9 @@ private:
     int m_nextRecordId;
     bool m_hasCompared;
     bool m_comparing;
+    // Last measured run time, so the completion message can be rebuilt in the
+    // other language.
+    qint64 m_lastElapsedMs;
 };
 
 #endif // BATCHCOMPAREPAGE_H

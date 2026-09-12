@@ -26,15 +26,15 @@ inline QString durationValue(qint64 milliseconds)
             .arg(QString::number(seconds, 'f', 2));
     }
     const qint64 totalSeconds = milliseconds / 1000;
-    return QCoreApplication::translate("formatutils", "%1 分 %2 秒")
+    return QCoreApplication::translate("formatutils", "%1 min %2 s")
         .arg(totalSeconds / 60)
         .arg(totalSeconds % 60);
 }
 
-// Same value with the "用时" label, for panels that show a single timing.
+// Same value with the "Time taken" label, for panels that show a single timing.
 inline QString durationLabel(qint64 milliseconds)
 {
-    return QCoreApplication::translate("formatutils", "用时 %1")
+    return QCoreApplication::translate("formatutils", "Time %1")
         .arg(durationValue(milliseconds));
 }
 
