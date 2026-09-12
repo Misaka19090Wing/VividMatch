@@ -2,6 +2,7 @@
 
 #include "batchcomparepage.h"
 #include "imagecomparepage.h"
+#include "videobatchpage.h"
 #include "videocomparepage.h"
 
 #include <QAction>
@@ -23,6 +24,7 @@ MainWin::MainWin(QWidget* parent)
     , m_imagePage(new ImageComparePage(this))
     , m_batchPage(new BatchComparePage(this))
     , m_videoPage(new VideoComparePage(this))
+    , m_videoBatchPage(new VideoBatchPage(this))
 {
     setWindowTitle(tr("VividMatch - 跨分辨率图片识别"));
     resize(980, 680);
@@ -34,6 +36,7 @@ MainWin::MainWin(QWidget* parent)
     m_stack->addWidget(m_imagePage);
     m_stack->addWidget(m_batchPage);
     m_stack->addWidget(m_videoPage);
+    m_stack->addWidget(m_videoBatchPage);
     setCentralWidget(m_stack);
     showHomePage();
     connect(m_imagePage, &ImageComparePage::backRequested,
@@ -41,6 +44,8 @@ MainWin::MainWin(QWidget* parent)
     connect(m_batchPage, &BatchComparePage::backRequested,
             this, &MainWin::showHomePage, Qt::UniqueConnection);
     connect(m_videoPage, &VideoComparePage::backRequested,
+            this, &MainWin::showHomePage, Qt::UniqueConnection);
+    connect(m_videoBatchPage, &VideoBatchPage::backRequested,
             this, &MainWin::showHomePage, Qt::UniqueConnection);
 
     setStyleSheet(QStringLiteral(R"(
@@ -127,9 +132,17 @@ QWidget* MainWin::createHomePage()
     videoButton->setCursor(Qt::PointingHandCursor);
     connect(videoButton, &QPushButton::released, this, &MainWin::showVideoComparePage);
 
+    QPushButton* videoBatchButton =
+        new QPushButton(tr("批量视频比对模式\n批量添加视频并自动分组相同视频"), optionArea);
+    videoBatchButton->setObjectName(QStringLiteral("modeButton"));
+    videoBatchButton->setMinimumWidth(420);
+    videoBatchButton->setCursor(Qt::PointingHandCursor);
+    connect(videoBatchButton, &QPushButton::released, this, &MainWin::showVideoBatchPage);
+
     options->addWidget(imageButton, 0, Qt::AlignHCenter);
     options->addWidget(batchButton, 0, Qt::AlignHCenter);
     options->addWidget(videoButton, 0, Qt::AlignHCenter);
+    options->addWidget(videoBatchButton, 0, Qt::AlignHCenter);
     options->addStretch(1);
 
     QHBoxLayout* centered = new QHBoxLayout;
@@ -168,4 +181,10 @@ void MainWin::showVideoComparePage()
 {
     m_stack->setCurrentWidget(m_videoPage);
     setWindowTitle(tr("VividMatch - 视频比对"));
+}
+
+void MainWin::showVideoBatchPage()
+{
+    m_stack->setCurrentWidget(m_videoBatchPage);
+    setWindowTitle(tr("VividMatch - 批量视频比对"));
 }

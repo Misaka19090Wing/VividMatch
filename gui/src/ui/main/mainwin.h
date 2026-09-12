@@ -8,6 +8,7 @@ class QStackedWidget;
 class BatchComparePage;
 class ImageComparePage;
 class VideoComparePage;
+class VideoBatchPage;
 
 class MainWin : public QMainWindow
 {
@@ -24,6 +25,7 @@ private:
     void showImageComparePage();
     void showBatchComparePage();
     void showVideoComparePage();
+    void showVideoBatchPage();
 
 private:
     QStackedWidget* m_stack;
@@ -31,6 +33,7 @@ private:
     ImageComparePage* m_imagePage;
     BatchComparePage* m_batchPage;
     VideoComparePage* m_videoPage;
+    VideoBatchPage* m_videoBatchPage;
 };
 
 #endif // MAINWIN_H

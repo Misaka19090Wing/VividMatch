@@ -39,8 +39,38 @@ soundtrack is compared only over the seconds that aligned visually:
 cpp\vividmatch_video.exe compare first.mp4 second.mp4
 cpp\vividmatch_video.exe compare first.mp4 second.mp4 0.78 --no-audio
 cpp\vividmatch_video.exe summary clip.mp4
+cpp\vividmatch_video.exe batch <folder-or-clip> [more...]
 cpp\vividmatch_video_test.exe
+cpp\vividmatch_video_batch_test.exe
 ```
+
+### Batch video comparison
+
+`cpp/video_batch.hpp` fingerprints a folder of clips, works out which of them are
+the same video, and picks one to keep per group.
+
+```bash
+cpp\vividmatch_video.exe batch "D:\clips"
+```
+
+The design follows where the time actually goes, measured on real clips:
+
+- **Extraction dominates.** Five 20-second clips take ~445 ms to decode but only
+  ~1.2 ms to compare in all 10 pairs. Each clip is therefore decoded exactly once,
+  on a thread pool.
+- **Comparing every pair still grows quadratically**, in both the clip count and
+  the clip length (sampling is once per second, so an hour-long clip is ~3600
+  samples). A 128-byte per-clip signature — the majority vote of each sampled
+  frame's block bits — is compared first, and only pairs above
+  `kDefaultSignatureThreshold` get the full comparison. Measured separation:
+  same content 0.97–1.00, different content 0.63–0.70, so the threshold sits in
+  the gap and drops nothing real.
+- **Audio is extracted lazily**, only for clips that take part in a visually
+  matching pair, because it costs a separate ffmpeg process per clip.
+
+A `partial` verdict deliberately does not merge a group: a shared opening or a
+clip cut from a longer video is not the same video. `identical` and `reencoded`
+both merge, since the latter is the same picture with the soundtrack swapped.
 
 The verdict is the 视听融合矩阵 from `strategy.md`, restricted to the cases this
 implementation can tell apart:

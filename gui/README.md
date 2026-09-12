@@ -30,6 +30,14 @@ seconds. The frame-match threshold is adjustable and the audio layer can be
 switched off. The audio layer needs the `ffmpeg` command line on `PATH`; without
 it the verdict falls back to the visual/temporal result.
 
+Batch video mode adds a folder, several clips or a drag-and-drop, then groups the
+clips that are the same video (`../cpp/video_batch.hpp`) and marks the one to
+keep with a star. The keep policy comes from a combo box: highest or lowest
+resolution, largest or smallest file, newest or oldest modification date, or keep
+everything. Each clip is decoded once on a thread pool, a compact signature
+prefilters the pairs, and audio is extracted only for the clips that matched
+visually, so a folder of long clips stays practical.
+
 Batch list controls:
 
 - Groups behave like Explorer groups and can be collapsed or expanded.

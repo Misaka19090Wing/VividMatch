@@ -28,3 +28,6 @@ endif()
 
 add_executable(vividmatch_video_test test_video_fingerprint.cpp)
 target_link_libraries(vividmatch_video_test PRIVATE ${OpenCV_LIBS})
+
+add_executable(vividmatch_video_batch_test test_video_batch.cpp)
+target_link_libraries(vividmatch_video_batch_test PRIVATE ${OpenCV_LIBS})
