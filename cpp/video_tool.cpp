@@ -1,4 +1,4 @@
-#include "video_fingerprint.hpp"
+#include "parallel_extract.hpp"
 
 #include <iomanip>
 #include <iostream>
@@ -34,12 +34,9 @@ void printComparisonDetails(const vividmatch::VideoComparison& comparison) {
 
 int compareVideos(const std::string& first, const std::string& second, double threshold,
                   bool withAudio) {
-    vividmatch::VideoFingerprint left = vividmatch::fingerprintVideo(first);
-    vividmatch::VideoFingerprint right = vividmatch::fingerprintVideo(second);
-    if (withAudio) {
-        left.audio = vividmatch::fingerprintAudio(first);
-        right.audio = vividmatch::fingerprintAudio(second);
-    }
+    vividmatch::VideoFingerprint left;
+    vividmatch::VideoFingerprint right;
+    vividmatch::fingerprintPair(first, second, left, right, withAudio);
     const vividmatch::VideoComparison comparison =
         vividmatch::compareVideoFingerprints(left, right, threshold);
 

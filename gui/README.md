@@ -20,7 +20,10 @@ a duplicate group checked.
 Video mode picks two clips and runs the visual, temporal and audio layers from
 `../cpp/video_fingerprint.hpp` / `../cpp/audio_fingerprint.hpp` on a worker
 thread, showing a poster frame and the resolution / frame rate / duration of
-each clip. The result panel reports the verdict plus the numbers behind it:
+each clip. Fingerprinting itself is concurrent (`../cpp/parallel_extract.hpp`):
+the audio stage overlaps the video decode and the two clips decode in parallel,
+so the wait is the longest single clip rather than the sum of all four stages.
+The result panel reports the verdict plus the numbers behind it:
 sampled and matched frames, the monotonic chain length, coverage, chain
 completeness, mean frame similarity, and the audio similarity over the aligned
 seconds. The frame-match threshold is adjustable and the audio layer can be

@@ -1,3 +1,4 @@
+#include "parallel_extract.hpp"
 #include "video_fingerprint.hpp"
 
 #include <opencv2/imgproc.hpp>
@@ -266,6 +267,52 @@ int main(int argc, char** argv) {
                                "a reversed timeline chains only one frame");
             failures += expect(comparison.verdict == VideoVerdict::Montage,
                                "a reversed timeline is not accepted as identical");
+        }
+
+        // --- concurrent extraction must equal sequential extraction ----------
+        // The video and audio stages overlap, and the two videos are decoded on
+        // separate threads. That must not change a single fingerprint: this is
+        // the check that would have caught the audio temp files colliding.
+        {
+            VideoFingerprint sequentialLeft = vividmatch::fingerprintVideo(path_a);
+            VideoFingerprint sequentialRight = vividmatch::fingerprintVideo(path_b);
+            sequentialLeft.audio = vividmatch::fingerprintAudio(path_a);
+            sequentialRight.audio = vividmatch::fingerprintAudio(path_b);
+
+            VideoFingerprint parallelLeft;
+            VideoFingerprint parallelRight;
+            vividmatch::fingerprintPair(path_a, path_b, parallelLeft, parallelRight, true);
+
+            auto sameFrames = [](const VideoFingerprint& left, const VideoFingerprint& right) {
+                if (left.frames.size() != right.frames.size()) {
+                    return false;
+                }
+                for (std::size_t i = 0; i < left.frames.size(); ++i) {
+                    if (left.frames[i].fingerprint.blocks != right.frames[i].fingerprint.blocks) {
+                        return false;
+                    }
+                }
+                return true;
+            };
+
+            failures += expect(sameFrames(parallelLeft, sequentialLeft)
+                                   && sameFrames(parallelRight, sequentialRight),
+                               "concurrent extraction yields identical fingerprints");
+            failures += expect(
+                parallelLeft.audio.available == sequentialLeft.audio.available
+                    && parallelRight.audio.available == sequentialRight.audio.available
+                    && parallelLeft.audio.seconds.size()
+                           == sequentialLeft.audio.seconds.size()
+                    && parallelRight.audio.seconds.size()
+                           == sequentialRight.audio.seconds.size(),
+                "concurrent extraction yields the same audio fingerprints");
+
+            const VideoComparison concurrent =
+                vividmatch::compareVideoFingerprints(parallelLeft, parallelRight);
+            const VideoComparison oneAtATime =
+                vividmatch::compareVideoFingerprints(sequentialLeft, sequentialRight);
+            failures += expect(concurrent.verdict == oneAtATime.verdict,
+                               "concurrent and sequential extraction agree on the verdict");
         }
 
         // --- the longest increasing run itself ------------------------------

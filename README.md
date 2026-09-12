@@ -59,6 +59,14 @@ per-frame threshold (default `0.78`) can be passed as a third argument, and
 rather than seeking, so two versions of a clip line up even at different frame
 rates or resolutions.
 
+`cpp/parallel_extract.hpp` runs the two halves of fingerprinting at the same
+time: the audio stage overlaps the video decode, and the two videos decode on
+separate threads. That measures 1.4x end to end on a 3 minute 720p pair, with
+byte-identical fingerprints and the same verdict. Hardware decoding was measured
+and deliberately not used - this OpenCV build cannot open MP4 through Media
+Foundation or DirectShow, and asking the FFMPEG backend for hardware
+acceleration makes reading *slower* than software.
+
 Audio is decoded by the `ffmpeg` command line (found on `PATH`), because the
 OpenCV build this project targets exposes no audio decoding API. The STFT uses a
 small radix-2 FFT written in `audio_fingerprint.hpp` rather than FFTW, so OpenCV

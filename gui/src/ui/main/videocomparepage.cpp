@@ -1,5 +1,7 @@
 #include "videocomparepage.h"
 
+#include "parallel_extract.hpp"
+
 #include <opencv2/imgproc.hpp>
 #include <opencv2/videoio.hpp>
 
@@ -175,17 +177,20 @@ VideoCompareWorker::VideoCompareWorker(QString firstPath, QString secondPath,
 void VideoCompareWorker::run()
 {
     try {
-        emit progress(tr("正在提取视频指纹..."));
-        vividmatch::VideoFingerprint left =
-            vividmatch::fingerprintVideo(m_firstPath.toStdString());
-        vividmatch::VideoFingerprint right =
-            vividmatch::fingerprintVideo(m_secondPath.toStdString());
-
-        if (m_includeAudio) {
-            emit progress(tr("正在提取音频指纹（ffmpeg）..."));
-            left.audio = vividmatch::fingerprintAudio(m_firstPath.toStdString());
-            right.audio = vividmatch::fingerprintAudio(m_secondPath.toStdString());
-        }
+        // The video and audio stages overlap. progress() is called from worker
+        // threads, so the update is routed back through the event loop.
+        vividmatch::VideoFingerprint left;
+        vividmatch::VideoFingerprint right;
+        vividmatch::fingerprintPair(
+            m_firstPath.toStdString(), m_secondPath.toStdString(), left, right,
+            m_includeAudio, std::string(), [this](const std::string& stage) {
+                const QString message = stage == "extracting audio fingerprints"
+                                            ? tr("正在提取音频指纹（ffmpeg）...")
+                                            : tr("正在提取视频指纹...");
+                QMetaObject::invokeMethod(
+                    this, [this, message]() { emit progress(message); },
+                    Qt::QueuedConnection);
+            });
 
         emit progress(tr("正在比对..."));
         vividmatch::VideoComparison comparison =

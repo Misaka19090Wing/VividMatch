@@ -436,21 +436,10 @@ inline VideoComparison compareVideoFingerprints(
     return result;
 }
 
-inline VideoComparison compareVideoFiles(
-    const std::string& leftPath,
-    const std::string& rightPath,
-    double samplesPerSecond = kDefaultSamplesPerSecond,
-    double frameThreshold = kDefaultFrameThreshold,
-    bool includeAudio = true,
-    const std::string& ffmpegPath = std::string()) {
-    VideoFingerprint left = fingerprintVideo(leftPath, samplesPerSecond);
-    VideoFingerprint right = fingerprintVideo(rightPath, samplesPerSecond);
-    if (includeAudio) {
-        left.audio = fingerprintAudio(leftPath, ffmpegPath);
-        right.audio = fingerprintAudio(rightPath, ffmpegPath);
-    }
-    return compareVideoFingerprints(left, right, frameThreshold);
-}
+// compareVideoFiles() - the convenience wrapper that fingerprints both files and
+// compares them - lives in parallel_extract.hpp, because running the two halves
+// of fingerprinting concurrently is an orchestration concern rather than part of
+// the fingerprint itself. Include that header when you want the one-call form.
 
 }  // namespace vividmatch
 

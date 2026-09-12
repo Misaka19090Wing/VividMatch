@@ -19,6 +19,7 @@
 // itself unavailable and the visual/temporal verdict stands alone.
 
 #include <algorithm>
+#include <atomic>
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
@@ -302,11 +303,20 @@ inline bool runFfmpegToFile(const std::string& ffmpeg, const std::string& video,
     return true;
 }
 
+// Unique per call, not per process: audio for several files is fingerprinted
+// concurrently, and a process-wide name would make them overwrite each other's
+// temporary WAV.
+inline unsigned long long nextTemporaryIndex() {
+    static std::atomic<unsigned long long> counter{0};
+    return counter.fetch_add(1);
+}
+
 inline std::string temporaryPath(const std::string& suffix) {
     char directory[MAX_PATH] = {0};
     const DWORD length = GetTempPathA(MAX_PATH, directory);
     std::string base = length > 0 ? std::string(directory) : std::string(".");
-    return base + "vividmatch_audio_" + std::to_string(GetCurrentProcessId()) + suffix;
+    return base + "vividmatch_audio_" + std::to_string(GetCurrentProcessId()) + "_"
+           + std::to_string(nextTemporaryIndex()) + suffix;
 }
 #else
 inline bool runFfmpegToFile(const std::string& ffmpeg, const std::string& video,
@@ -321,8 +331,14 @@ inline bool runFfmpegToFile(const std::string& ffmpeg, const std::string& video,
     return true;
 }
 
+inline unsigned long long nextTemporaryIndex() {
+    static std::atomic<unsigned long long> counter{0};
+    return counter.fetch_add(1);
+}
+
 inline std::string temporaryPath(const std::string& suffix) {
-    return "/tmp/vividmatch_audio_" + std::to_string(static_cast<long>(::getpid())) + suffix;
+    return "/tmp/vividmatch_audio_" + std::to_string(static_cast<long>(::getpid())) + "_"
+           + std::to_string(nextTemporaryIndex()) + suffix;
 }
 #endif
 
