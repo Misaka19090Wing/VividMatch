@@ -104,60 +104,75 @@ QString formatDuration(double seconds)
 // length, unless the user picks another position.
 constexpr int kDefaultCapturePercent = 50;
 
-// A frame to show as the clip's preview, or an empty Mat if the clip cannot be
-// read as a picture.
+// Everything the list shows about a clip that needs the clip to be opened: a
+// preview frame plus its real resolution and duration. Gathered in one pass so
+// the resolution and duration columns can be filled as soon as the clip is
+// added, rather than only after a comparison.
+struct ClipProbe {
+    cv::Mat frame;
+    int width = 0;
+    int height = 0;
+    double duration = 0.0;
+};
+
+// Opens the clip once, reads its properties, and grabs a preview frame from
+// `percent` of its length. The frame is empty if the clip cannot be read as a
+// picture; the properties may still be known in that case.
 //
 // `percent` is how far into the clip to look, which the user controls: the first
 // frame of a video is often a title card or a fade from black, so the default is
 // the middle of the clip rather than its start.
-cv::Mat grabPreviewFrame(const std::string& path, int percent)
+ClipProbe probeClip(const std::string& path, int percent)
 {
+    ClipProbe result;
     cv::VideoCapture capture(path, cv::CAP_FFMPEG);
     if (!capture.isOpened()) {
         capture.open(path);
     }
     if (!capture.isOpened()) {
-        return cv::Mat();
+        return result;
     }
 
+    // The coded size, which is what a user compares between two copies.
+    result.width = static_cast<int>(capture.get(cv::CAP_PROP_FRAME_WIDTH));
+    result.height = static_cast<int>(capture.get(cv::CAP_PROP_FRAME_HEIGHT));
     const double frames = capture.get(cv::CAP_PROP_FRAME_COUNT);
     const double fps = capture.get(cv::CAP_PROP_FPS);
-    const double seconds = fps > 0.0 ? frames / fps : 0.0;
-    if (seconds > 0.0) {
+    if (frames > 0.0 && fps > 0.0) {
+        result.duration = frames / fps;
+    }
+
+    if (result.duration > 0.0) {
         // Clamp so 100% does not seek past the end and fail outright.
         const double fraction =
             std::min(0.99, std::max(0.0, static_cast<double>(percent) / 100.0));
         // A time-based seek is used rather than a frame index: it lands in the
         // right part of the clip, which is all a preview needs, and frame-exact
         // seeking is slower.
-        capture.set(cv::CAP_PROP_POS_MSEC, seconds * fraction * 1000.0);
+        capture.set(cv::CAP_PROP_POS_MSEC, result.duration * fraction * 1000.0);
     }
 
-    cv::Mat frame;
     // Seeking can land slightly off; take the first frame that arrives.
-    for (int attempt = 0; attempt < 3 && frame.empty(); ++attempt) {
-        if (!capture.read(frame)) {
+    for (int attempt = 0; attempt < 3 && result.frame.empty(); ++attempt) {
+        if (!capture.read(result.frame)) {
             break;
         }
     }
     capture.release();
-    if (frame.empty()) {
-        return frame;
-    }
 
-    // Cap the stored size to bound memory across a large batch. The aspect ratio
-    // is preserved, and the delegate scales the result up or down to the column,
-    // so a wider column still shows a wider picture.
-    if (frame.cols > kMaxPreviewWidth) {
+    if (!result.frame.empty() && result.frame.cols > kMaxPreviewWidth) {
+        // Cap the stored size to bound memory across a large batch. The aspect
+        // ratio is preserved, and the delegate scales the result to the column,
+        // so a wider column still shows a wider picture.
         cv::Mat scaled;
-        const double scale = static_cast<double>(kMaxPreviewWidth) / frame.cols;
-        cv::resize(frame, scaled,
+        const double scale = static_cast<double>(kMaxPreviewWidth) / result.frame.cols;
+        cv::resize(result.frame, scaled,
                    cv::Size(kMaxPreviewWidth,
-                            std::max(1, static_cast<int>(frame.rows * scale))),
+                            std::max(1, static_cast<int>(result.frame.rows * scale))),
                    0.0, 0.0, cv::INTER_AREA);
-        return scaled;
+        result.frame = scaled;
     }
-    return frame;
+    return result;
 }
 
 QImage matToImage(const cv::Mat& frame)
@@ -364,13 +379,15 @@ public:
     void run() override
     {
         const std::string utf8 = m_path.toStdString();
-        const QImage image = matToImage(grabPreviewFrame(utf8, m_percent));
+        const ClipProbe probe = probeClip(utf8, m_percent);
+        const QImage image = matToImage(probe.frame);
         // Delivered on the page's thread; an empty image still has to arrive so
         // the page can stop waiting for this clip.
         QMetaObject::invokeMethod(
             m_page,
-            [page = m_page, path = m_path, image]() {
-                emit page->thumbnailReady(path, image);
+            [page = m_page, path = m_path, image, probe]() {
+                emit page->thumbnailReady(path, image, probe.width, probe.height,
+                                          probe.duration);
             },
             Qt::QueuedConnection);
     }
@@ -784,6 +801,9 @@ void VideoBatchPage::regrabThumbnails()
     // Drop what is stored so requestThumbnails() picks every clip up again. A
     // grab that is still in flight for a clip will land and be kept, which is
     // harmless: it is a frame from the same position.
+    //
+    // The measured size and duration are kept: they describe the clip, not the
+    // position the frame was taken from.
     for (auto it = m_records.begin(); it != m_records.end(); ++it) {
         it.value().thumbnail = QImage();
     }
@@ -795,32 +815,54 @@ void VideoBatchPage::regrabThumbnails()
     m_progress->setFormat(tr("正在按片长 %1% 处重新截帧").arg(capturePositionPercent()));
 }
 
-void VideoBatchPage::applyThumbnail(const QString& path, const QImage& image)
+void VideoBatchPage::applyThumbnail(const QString& path, const QImage& image, int width,
+                                    int height, double duration)
 {
     m_pendingThumbnails.remove(path);
-    if (image.isNull()) {
-        // Remember the failure so a rebuild does not ask for it again.
-        return;
-    }
 
     const int recordId = recordIdForPath(path);
     if (recordId > 0) {
-        m_records[recordId].thumbnail = image;
-        // The stored frame is also the clip's measured resolution source, but the
-        // comparison reports that itself; do not overwrite it here.
-    }
-
-    // Attach the frame to every row showing this clip, then let the tree work out
-    // the new row height.
-    for (QTreeWidgetItem* item : allRowItems()) {
-        const RowData* row = recordForItem(item);
-        if (row != nullptr && QString::compare(row->path, path, Qt::CaseInsensitive) == 0) {
-            item->setData(PreviewColumn, kThumbnailImageRole, image);
+        RowData& row = m_records[recordId];
+        // The probe opened the clip, so the real resolution and duration are known
+        // now. Filling them here is what stops those two columns sitting on a dash
+        // until a comparison has run.
+        if (!row.measured && width > 0 && height > 0) {
+            row.measured = true;
+            row.width = width;
+            row.height = height;
+            row.duration = duration;
+        }
+        if (!image.isNull()) {
+            row.thumbnail = image;
         }
     }
-    // The delegate sizes rows from the stored image, so a repaint is what makes
-    // the row grow. Asking the view to re-evaluate the hint alone is not enough
-    // for rows already laid out.
+    if (image.isNull() && width <= 0) {
+        // Nothing could be read; a rebuild would only fail the same way.
+        return;
+    }
+
+    // Refresh every row showing this clip, then let the tree work out the new row
+    // heights. Rebuilding the rows is simpler and safer than patching them in
+    // place, and it is what makes the resolution and duration text appear too.
+    const RowData* record = recordId > 0 ? &m_records[recordId] : nullptr;
+    for (QTreeWidgetItem* item : allRowItems()) {
+        const RowData* row = recordForItem(item);
+        if (row == nullptr || record == nullptr
+            || QString::compare(row->path, path, Qt::CaseInsensitive) != 0) {
+            continue;
+        }
+        if (!image.isNull()) {
+            item->setData(PreviewColumn, kThumbnailImageRole, image);
+        }
+        if (record->measured) {
+            item->setText(ResolutionColumn,
+                          QStringLiteral("%1x%2").arg(record->width).arg(record->height));
+            item->setText(DurationColumn, formatDuration(record->duration));
+        }
+    }
+    // The delegate sizes rows from the stored image, so the layout has to be redone
+    // for the row to grow. Asking the view to re-evaluate the hint alone is not
+    // enough for rows already laid out.
     m_tree->doItemsLayout();
 }
 
@@ -901,8 +943,12 @@ QTreeWidgetItem* VideoBatchPage::createRowItem(int recordId) const
     item->setData(CheckColumn, kRecordIdRole, recordId);
     item->setFlags(Qt::ItemIsEnabled | Qt::ItemIsSelectable | Qt::ItemIsUserCheckable);
     item->setCheckState(CheckColumn, Qt::Checked);
+    // The preview lives on the record, so every rebuilt row gets its picture back
+    // instead of only the rows that happened to be on screen when it was grabbed.
+    if (!row.thumbnail.isNull()) {
+        item->setData(PreviewColumn, kThumbnailImageRole, row.thumbnail);
+    }
     item->setText(NameColumn, row.name);
-    // A dash, not a value: reading the clip is what the comparison run does.
     item->setText(ResolutionColumn, row.measured
                                         ? QStringLiteral("%1x%2").arg(row.width).arg(row.height)
                                         : QStringLiteral("—"));

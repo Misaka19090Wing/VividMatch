@@ -117,9 +117,12 @@ public:
 
 signals:
     void backRequested();
-    // Emitted when a background frame grab finishes; an empty image means the
-    // clip could not be read as a picture.
-    void thumbnailReady(const QString& path, const QImage& image);
+    // Emitted when a background frame grab finishes. An empty image means the
+    // clip could not be read as a picture. The size and duration come from the
+    // same clip opening, so the resolution and duration columns can be filled in
+    // without a second pass over the file.
+    void thumbnailReady(const QString& path, const QImage& image, int width, int height,
+                        double duration);
 
 protected:
     bool eventFilter(QObject* watched, QEvent* event) override;
@@ -191,7 +194,8 @@ private:
     void addPaths(const QStringList& paths);
     // Starts background frame grabs for clips that do not have a preview yet.
     void requestThumbnails();
-    void applyThumbnail(const QString& path, const QImage& image);
+    void applyThumbnail(const QString& path, const QImage& image, int width, int height,
+                        double duration);
     // Drops every stored preview and grabs them again, used after the capture
     // position changes so the column shows frames from the new position.
     void regrabThumbnails();
