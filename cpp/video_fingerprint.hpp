@@ -169,6 +169,13 @@ inline std::vector<int> longestIncreasingRun(const std::vector<std::pair<int, in
 // accurate for every codec, and the sampling instants are identical for both
 // videos being compared, so two versions of the same clip line up even when
 // their frame rates differ.
+//
+// Sample instants are derived from the frame counter and the nominal frame
+// rate rather than from CAP_PROP_POS_MSEC, which some backends report as a
+// stale or zero value. That also lets the frames between two samples be walked
+// with grab(): OpenCV still decodes them, but it skips the colour conversion
+// and the copy into a cv::Mat, which is most of the work we would otherwise do
+// on frames we are about to discard.
 inline VideoFingerprint fingerprintVideo(
     const std::string& path,
     double samplesPerSecond = kDefaultSamplesPerSecond,
@@ -194,39 +201,64 @@ inline VideoFingerprint fingerprintVideo(
     video.width = static_cast<int>(capture.get(cv::CAP_PROP_FRAME_WIDTH));
     video.height = static_cast<int>(capture.get(cv::CAP_PROP_FRAME_HEIGHT));
     const double reportedFrames = capture.get(cv::CAP_PROP_FRAME_COUNT);
+    const std::int64_t frameCount = reportedFrames > 0.0
+                                        ? static_cast<std::int64_t>(reportedFrames)
+                                        : 0;
     const double reportedDuration =
         reportedFrames > 0.0 ? reportedFrames / video.fps : 0.0;
 
     const double samplePeriod = 1.0 / samplesPerSecond;
+    const double framesPerSample = video.fps / samplesPerSecond;
     double nextTarget = samplingOffset;
-    double lastTimestamp = -1.0;
-    double elapsed = 0.0;
 
-    cv::Mat frame;
-    for (;;) {
-        if (!capture.read(frame) || frame.empty()) {
-            break;
-        }
-
-        double timestamp = capture.get(cv::CAP_PROP_POS_MSEC) / 1000.0;
-        // Some backends return 0 or a stale value for POS_MSEC; fall back to
-        // counting frames at the nominal rate.
-        if (!(timestamp > lastTimestamp)) {
-            timestamp = elapsed + 1.0 / video.fps;
-        }
-        elapsed = timestamp;
-        lastTimestamp = timestamp;
-
-        if (timestamp + 1e-9 < nextTarget) {
-            continue;
-        }
-        // Keep the first frame at or past the sampling instant. Frames are
-        // decoded in order, so each instant yields at most one sample.
-        video.frames.push_back({timestamp, makeFingerprint(frame)});
-        nextTarget += samplePeriod;
-        while (nextTarget <= timestamp) {
+    if (frameCount > 0 && framesPerSample > 1.5) {
+        // Known length and more frames than samples: walk with grab().
+        cv::Mat frame;
+        for (std::int64_t index = 0; index < frameCount; ++index) {
+            const double timestamp = static_cast<double>(index) / video.fps;
+            if (timestamp + 1e-9 < nextTarget) {
+                if (!capture.grab()) {
+                    break;
+                }
+                continue;
+            }
+            if (!capture.read(frame) || frame.empty()) {
+                break;
+            }
+            video.frames.push_back({timestamp, makeFingerprint(frame)});
             nextTarget += samplePeriod;
+            while (nextTarget <= timestamp) {
+                nextTarget += samplePeriod;
+            }
         }
+    } else {
+        // Unknown or short stream: decode everything and pick as we go.
+        double lastTimestamp = -1.0;
+        double elapsed = 0.0;
+        std::int64_t index = 0;
+        cv::Mat frame;
+        for (;;) {
+            if (!capture.read(frame) || frame.empty()) {
+                break;
+            }
+            double timestamp = capture.get(cv::CAP_PROP_POS_MSEC) / 1000.0;
+            if (!(timestamp > lastTimestamp)) {
+                timestamp = static_cast<double>(index) / video.fps;
+            }
+            ++index;
+            elapsed = timestamp;
+            lastTimestamp = timestamp;
+
+            if (timestamp + 1e-9 < nextTarget) {
+                continue;
+            }
+            video.frames.push_back({timestamp, makeFingerprint(frame)});
+            nextTarget += samplePeriod;
+            while (nextTarget <= timestamp) {
+                nextTarget += samplePeriod;
+            }
+        }
+        (void)elapsed;
     }
 
     video.totalFrames = static_cast<std::int64_t>(capture.get(cv::CAP_PROP_FRAME_COUNT));
