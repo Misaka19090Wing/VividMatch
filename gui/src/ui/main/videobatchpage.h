@@ -134,7 +134,15 @@ private:
 #endif
 
     void addPaths(const QStringList& paths);
+    // Shows clips that are not in the list yet, under a heading that says
+    // whether they are waiting or were added after a comparison. Name, size and
+    // date come straight from the filesystem; resolution and duration only exist
+    // once fingerprinting has read the clip, so those columns show a dash until
+    // the next comparison fills them in. Reading every clip's header up front
+    // would stall the window on a large drop.
+    void rebuildPendingTree();
     void rebuildTree(const VideoBatchOutcome& outcome);
+    int unlistedPathCount() const;
     void updateStatus();
     void setBusy(bool busy);
     KeepPolicy currentPolicy() const;
@@ -147,6 +155,7 @@ private:
     QLabel* m_status;
 
     QStringList m_paths;
+    QStringList m_listedPaths;  // clips already shown in the tree
     int m_lastClipCount;
     int m_lastDuplicateGroups;
     int m_lastFailedCount;

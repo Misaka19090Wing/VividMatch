@@ -33,6 +33,9 @@
 namespace {
 
 constexpr int kPathRole = Qt::UserRole + 1;
+// Marks the group holding clips that have not been compared yet, so a rebuild
+// can replace it without touching the result groups.
+constexpr int kPendingMarker = -1;
 
 QStringList videoWildcards()
 {
@@ -392,11 +395,76 @@ void VideoBatchPage::addPaths(const QStringList& paths)
         ++added;
     }
     if (added > 0) {
+        // Show the new clips immediately. Waiting for a comparison to display
+        // them leaves the list looking as if the add did nothing.
+        rebuildPendingTree();
         m_progress->setRange(0, 1);
         m_progress->setValue(0);
         m_progress->setFormat(tr("已加入 %1 个视频，等待比对").arg(added));
     }
     updateStatus();
+}
+
+void VideoBatchPage::rebuildPendingTree()
+{
+    // Result groups stay put; only the clips that are not shown yet are (re)built.
+    // That way adding a clip to an already compared list extends the list instead
+    // of wiping the results.
+    const bool hadResults = !m_listedPaths.isEmpty();
+    for (int i = m_tree->topLevelItemCount() - 1; i >= 0; --i) {
+        if (m_tree->topLevelItem(i)->data(0, kPathRole).toInt() == kPendingMarker) {
+            delete m_tree->takeTopLevelItem(i);
+        }
+    }
+
+    QStringList missing;
+    for (const QString& path : m_paths) {
+        if (!m_listedPaths.contains(path)) {
+            missing.append(path);
+        }
+    }
+    if (missing.isEmpty()) {
+        updateStatus();
+        return;
+    }
+
+    QTreeWidgetItem* groupItem = new QTreeWidgetItem(m_tree);
+    groupItem->setFirstColumnSpanned(true);
+    groupItem->setFlags(Qt::ItemIsEnabled);
+    groupItem->setData(0, kPathRole, kPendingMarker);
+    groupItem->setText(0, hadResults ? tr("新加入 · %1 个").arg(missing.size())
+                                     : tr("待比对 · %1 个").arg(missing.size()));
+    groupItem->setExpanded(true);
+    groupItem->setBackground(0, QBrush(QColor(232, 237, 243)));
+    groupItem->setForeground(0, QBrush(QColor(51, 65, 85)));
+    QFont font = groupItem->font(0);
+    font.setBold(true);
+    groupItem->setFont(0, font);
+
+    for (const QString& path : missing) {
+        const QFileInfo file(path);
+        QTreeWidgetItem* child = new QTreeWidgetItem(groupItem);
+        child->setData(0, kPathRole, path);
+        child->setText(0, file.fileName());
+        // A dash, not a value: reading the clip is what the comparison run does.
+        child->setText(1, QStringLiteral("—"));
+        child->setText(2, QStringLiteral("—"));
+        child->setText(3, humanSize(file.size()));
+        child->setText(4, file.lastModified().toString(QStringLiteral("yyyy-MM-dd HH:mm:ss")));
+        child->setToolTip(0, path);
+    }
+    updateStatus();
+}
+
+int VideoBatchPage::unlistedPathCount() const
+{
+    int count = 0;
+    for (const QString& path : m_paths) {
+        if (!m_listedPaths.contains(path)) {
+            ++count;
+        }
+    }
+    return count;
 }
 
 void VideoBatchPage::clearList()
@@ -405,6 +473,7 @@ void VideoBatchPage::clearList()
         return;
     }
     m_paths.clear();
+    m_listedPaths.clear();
     m_tree->clear();
     m_lastClipCount = 0;
     m_lastDuplicateGroups = 0;
@@ -438,7 +507,8 @@ void VideoBatchPage::startCompare()
     }
 
     setBusy(true);
-    m_tree->clear();
+    // The pending list stays on screen while the worker runs; it is replaced by
+    // the grouped results when they arrive.
     m_progress->setRange(0, 1);
     m_progress->setValue(0);
     m_progress->setFormat(tr("准备中..."));
@@ -501,6 +571,8 @@ void VideoBatchPage::onCompareFinished(VideoBatchOutcome outcome)
 void VideoBatchPage::rebuildTree(const VideoBatchOutcome& outcome)
 {
     m_tree->clear();
+    // Every clip is now represented by its result row.
+    m_listedPaths = m_paths;
     for (const VideoBatchGroupInfo& group : outcome.groups) {
         QTreeWidgetItem* groupItem = new QTreeWidgetItem(m_tree);
         groupItem->setFirstColumnSpanned(true);
@@ -547,6 +619,12 @@ void VideoBatchPage::updateStatus()
         text += tr("，已比对 %1 个，重复组 %2 个")
                     .arg(m_lastClipCount)
                     .arg(m_lastDuplicateGroups);
+    }
+    // Clips added after a comparison are listed but not compared yet; saying so
+    // avoids the impression that the results already cover them.
+    const int pending = unlistedPathCount();
+    if (pending > 0 && m_lastClipCount > 0) {
+        text += tr("，%1 个待比对").arg(pending);
     }
     if (m_lastFailedCount > 0) {
         text += tr("，%1 个无法读取").arg(m_lastFailedCount);
