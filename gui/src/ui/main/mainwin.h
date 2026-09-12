@@ -33,6 +33,11 @@ protected:
     // window reacts to a language switch without being rebuilt.
     void changeEvent(QEvent* event) override;
 
+private slots:
+    // Reacts to a language switch: rewrites the window's own text, then tells the
+    // user that a restart applies the change everywhere.
+    void onLanguageChanged();
+
 private:
     // One comparison mode, as offered both in the File menu and on the home page.
     // Holding them in one list keeps the two entry points in step.
@@ -49,6 +54,9 @@ private:
     void setupMenus();
     QWidget* createHomePage();
     void retranslateUi();
+    // Tells the user a restart applies the language everywhere. Shown once per
+    // switch unless the previous notice is still on screen.
+    void showRestartNotice();
     // Page widget for a mode index, used to re-apply the window title.
     QWidget* pageForMode(int index) const;
 
@@ -81,6 +89,15 @@ private:
     QAction* m_languageChineseAction;
     QAction* m_homeAction;
     QAction* m_exitAction;
+    // The restart notice is shown once per switch; a second switch while it is up
+    // must not stack another copy.
+    bool m_restartNoticeShowing;
+
+#ifdef VIVIDMATCH_TEST_HOOKS
+    // Lets a harness reach the language manager to drive a switch without a real
+    // menu click, and read the notice it shows.
+    friend class MainWinTestHook;
+#endif
 };
 
 #endif // MAINWIN_H

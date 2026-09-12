@@ -8,13 +8,16 @@
 #include <QAction>
 #include <QActionGroup>
 #include <QEvent>
+#include <QFile>
 #include <QFont>
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QMenu>
 #include <QMenuBar>
+#include <QMessageBox>
 #include <QPushButton>
 #include <QStackedWidget>
+#include <QTimer>
 #include <QVBoxLayout>
 #include <QWidget>
 
@@ -37,6 +40,7 @@ MainWin::MainWin(QWidget* parent)
     , m_languageChineseAction(nullptr)
     , m_homeAction(nullptr)
     , m_exitAction(nullptr)
+    , m_restartNoticeShowing(false)
 {
     resize(980, 680);
     setMinimumSize(860, 600);
@@ -67,9 +71,11 @@ MainWin::MainWin(QWidget* parent)
 
     // Picking a language installs the translation; Qt then sends a
     // LanguageChange event, and changeEvent() rewrites the visible text.
-    connect(m_languages, &LanguageManager::languageChanged, this, [this]() {
-        retranslateUi();
-    });
+    // A language switch has two halves: Qt's own LanguageChange event (handled in
+    // changeEvent) rewrites the text of every widget that implements it, and this
+    // signal handles the window's own strings plus the restart hint.
+    connect(m_languages, &LanguageManager::languageChanged, this,
+            &MainWin::onLanguageChanged);
 
     setStyleSheet(QStringLiteral(R"(
         QMainWindow { background: #f3f5f7; }
@@ -227,6 +233,18 @@ QWidget* MainWin::createHomePage()
     return page;
 }
 
+void MainWin::onLanguageChanged()
+{
+    retranslateUi();
+    // Not every string can follow a translator swap: text already sitting in a
+    // status line or a finished result panel is only rewritten where the code
+    // explicitly does so. Saying a restart applies it everywhere is more honest
+    // than pretending the switch is always complete.
+    // Deferred so the dialog is built once this signal has finished dispatching,
+    // and therefore in the language just chosen rather than the previous one.
+    QTimer::singleShot(0, this, [this]() { showRestartNotice(); });
+}
+
 void MainWin::retranslateUi()
 {
     // Called from the constructor (before every member exists) and on every
@@ -317,6 +335,25 @@ QWidget* MainWin::pageForMode(int index) const
             break;
     }
     return nullptr;
+}
+
+void MainWin::showRestartNotice()
+{
+    if (m_restartNoticeShowing) {
+        return;
+    }
+    m_restartNoticeShowing = true;
+
+    QMessageBox box(this);
+    box.setIcon(QMessageBox::Information);
+    box.setWindowTitle(tr("Language changed"));
+    box.setText(tr("The language has been switched."));
+    box.setInformativeText(tr("Most of the interface has already changed. Restart the "
+                              "application to apply the new language everywhere."));
+    box.setStandardButtons(QMessageBox::Ok);
+    box.exec();
+
+    m_restartNoticeShowing = false;
 }
 
 void MainWin::showHomePage()
