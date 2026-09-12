@@ -20,6 +20,11 @@ target_link_libraries(vividmatch_image_test PRIVATE ${OpenCV_LIBS})
 
 add_executable(vividmatch_video video_tool.cpp)
 target_link_libraries(vividmatch_video PRIVATE ${OpenCV_LIBS})
+if(MSVC)
+    # video_tool.cpp defines wmain() so Windows hands it UTF-16 arguments;
+    # that needs the wide console entry point rather than main().
+    target_link_options(vividmatch_video PRIVATE /SUBSYSTEM:CONSOLE /ENTRY:wmainCRTStartup)
+endif()
 
 add_executable(vividmatch_video_test test_video_fingerprint.cpp)
 target_link_libraries(vividmatch_video_test PRIVATE ${OpenCV_LIBS})

@@ -156,6 +156,41 @@ inline double audioFeatureSimilarity(const AudioSecondFeature& left,
 
 namespace detail {
 
+#ifdef _WIN32
+// Paths arrive as UTF-8 and are handed to the Win32 wide APIs, which is what
+// keeps non-ASCII file names working.
+inline std::wstring widen(const std::string& utf8) {
+    if (utf8.empty()) {
+        return std::wstring();
+    }
+    const int length = MultiByteToWideChar(CP_UTF8, 0, utf8.c_str(),
+                                           static_cast<int>(utf8.size()), nullptr, 0);
+    if (length <= 0) {
+        return std::wstring();
+    }
+    std::wstring wide(static_cast<std::size_t>(length), L'\0');
+    MultiByteToWideChar(CP_UTF8, 0, utf8.c_str(), static_cast<int>(utf8.size()),
+                        wide.data(), length);
+    return wide;
+}
+
+inline std::string narrow(const std::wstring& wide) {
+    if (wide.empty()) {
+        return std::string();
+    }
+    const int length = WideCharToMultiByte(CP_UTF8, 0, wide.c_str(),
+                                           static_cast<int>(wide.size()), nullptr, 0,
+                                           nullptr, nullptr);
+    if (length <= 0) {
+        return std::string();
+    }
+    std::string utf8(static_cast<std::size_t>(length), '\0');
+    WideCharToMultiByte(CP_UTF8, 0, wide.c_str(), static_cast<int>(wide.size()),
+                        utf8.data(), length, nullptr, nullptr);
+    return utf8;
+}
+#endif
+
 inline std::uint32_t readLe32(const unsigned char* bytes) {
     return static_cast<std::uint32_t>(bytes[0])
            | (static_cast<std::uint32_t>(bytes[1]) << 8)
@@ -169,10 +204,17 @@ inline std::uint16_t readLe16(const unsigned char* bytes) {
 }
 
 // Minimal RIFF/WAVE reader: walks the chunk list and keeps the 16-bit PCM data
-// chunk that ffmpeg writes for us.
+// chunk that ffmpeg writes for us. Opening through ifstream(path) would fail on
+// a non-ASCII temporary path, so on Windows the wide form is used; this makes
+// makeTemporaryPath's UTF-8 result readable no matter where the user's TEMP is.
 inline bool readWavPcm(const std::string& path, std::vector<double>& samples,
                        int& sampleRate) {
+#ifdef _WIN32
+    const std::wstring widePath = widen(path);
+    std::ifstream stream(widePath.c_str(), std::ios::binary);
+#else
     std::ifstream stream(path, std::ios::binary);
+#endif
     if (!stream) {
         return false;
     }
@@ -245,10 +287,10 @@ inline std::string findFfmpeg(const std::string& explicitPath) {
     return std::string();
 }
 
-#ifdef _WIN32
-inline std::string quoteArgument(const std::string& value) {
-    return "\"" + value + "\"";
-}
+struct FfmpegResult {
+    bool ok = false;
+    std::string error;
+};
 
 // Turns ffmpeg's own message into something the user can act on. "No audio
 // track" is by far the most common case and is not an error the user needs to
@@ -263,6 +305,10 @@ inline std::string explainFfmpegFailure(const std::string& output) {
         || output.find("moov atom not found") != std::string::npos) {
         return "the file could not be read (truncated or unsupported container)";
     }
+    if (output.find("No such file or directory") != std::string::npos
+        || output.find("Error opening input") != std::string::npos) {
+        return "ffmpeg could not find or open the file";
+    }
     if (output.find("Permission denied") != std::string::npos) {
         return "ffmpeg was denied access to the file or the temporary folder";
     }
@@ -272,8 +318,7 @@ inline std::string explainFfmpegFailure(const std::string& output) {
     return "ffmpeg could not decode an audio track";
 }
 
-// Reads the whole capture file, keeping only the last few lines: ffmpeg puts the
-// actual reason at the end.
+// Reads the tail of a capture file: ffmpeg puts the actual reason at the end.
 inline std::string tailOfFile(const std::string& path, std::size_t maxLength = 500) {
     std::ifstream stream(path, std::ios::binary);
     if (!stream) {
@@ -295,63 +340,129 @@ inline std::string tailOfFile(const std::string& path, std::size_t maxLength = 5
     return content;
 }
 
-// Runs ffmpeg through cmd.exe with its output redirected to files. Using a
-// command line avoids the pipe plumbing while keeping the whole thing local:
-// nothing is uploaded and no network is touched. stderr is captured rather than
-// discarded, because it carries the reason the decode failed.
-inline bool runFfmpegToFile(const std::string& ffmpeg, const std::string& video,
-                            const std::string& wavOut, std::string& error) {
-    const std::string logFile = wavOut + ".log";
-    const std::string command = quoteArgument(ffmpeg)
-                                + " -nostdin -v error -y -i " + quoteArgument(video)
-                                + " -vn -ac 1 -ar " + std::to_string(kAudioSampleRate)
-                                + " -c:a pcm_s16le " + quoteArgument(wavOut)
-                                + " > " + quoteArgument(logFile) + " 2>&1";
+#ifdef _WIN32
 
-    std::string commandFile = wavOut + ".cmd";
-    {
-        std::ofstream script(commandFile, std::ios::binary);
-        if (!script) {
-            error = "cannot create helper script in the temporary folder";
-            return false;
+// ffmpeg receives the arguments directly as UTF-16, with no cmd.exe in the
+// middle. That matters: writing the command to a .cmd file and running it
+// through cmd.exe mangles any non-ASCII path, because cmd reads .cmd files in
+// the OEM code page rather than UTF-8. A Chinese or Japanese file name then
+// arrives at ffmpeg as mojibake and the audio layer looks broken.
+// Quotes one argument the way CommandLineToArgvW will parse it back.
+inline std::wstring quoteWideArgument(const std::wstring& value) {
+    const bool needsQuotes =
+        value.empty() || value.find_first_of(L" \t\n\v\"") != std::wstring::npos;
+    if (!needsQuotes) {
+        return value;
+    }
+    std::wstring quoted = L"\"";
+    for (std::size_t i = 0; i < value.size(); ++i) {
+        std::size_t backslashes = 0;
+        while (i < value.size() && value[i] == L'\\') {
+            ++backslashes;
+            ++i;
         }
-        script << "@echo off\r\n" << command << "\r\n";
+        if (i == value.size()) {
+            // Trailing backslashes must be doubled before the closing quote.
+            quoted.append(backslashes * 2, L'\\');
+            break;
+        }
+        if (value[i] == L'"') {
+            quoted.append(backslashes * 2 + 1, L'\\');
+            quoted.push_back(L'"');
+        } else {
+            quoted.append(backslashes, L'\\');
+            quoted.push_back(value[i]);
+        }
+    }
+    quoted.push_back(L'"');
+    return quoted;
+}
+
+// Runs ffmpeg with the log going straight to a file handle, so no shell is
+// involved and no intermediate script is written.
+inline FfmpegResult runFfmpegToFile(const std::string& ffmpeg, const std::string& video,
+                                    const std::string& wavOut) {
+    FfmpegResult result;
+
+    std::wstring commandLine = quoteWideArgument(widen(ffmpeg));
+    const wchar_t* fixedArguments[] = {
+        L" -nostdin -v error -y -i ", L" -vn -ac 1 -ar ",
+        L" -c:a pcm_s16le ",         L""};
+    commandLine += fixedArguments[0];
+    commandLine += quoteWideArgument(widen(video));
+    commandLine += fixedArguments[1];
+    commandLine += std::to_wstring(kAudioSampleRate);
+    commandLine += fixedArguments[2];
+    commandLine += quoteWideArgument(widen(wavOut));
+
+    std::vector<wchar_t> mutableCommand(commandLine.begin(), commandLine.end());
+    mutableCommand.push_back(L'\0');
+
+    SECURITY_ATTRIBUTES attributes{};
+    attributes.nLength = sizeof(attributes);
+    attributes.bInheritHandle = TRUE;
+
+    const std::wstring logPath = widen(wavOut) + L".log";
+    HANDLE logHandle = CreateFileW(logPath.c_str(), GENERIC_WRITE, FILE_SHARE_READ, &attributes,
+                                   CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (logHandle == INVALID_HANDLE_VALUE) {
+        result.error = "cannot create a log file in the temporary folder";
+        return result;
     }
 
-    std::string shell;
-    const char* comspec = std::getenv("COMSPEC");
-    shell = comspec != nullptr ? comspec : "cmd.exe";
-    std::string shellCommand = quoteArgument(shell) + " /C " + quoteArgument(commandFile);
-
-    STARTUPINFOA startup{};
+    STARTUPINFOW startup{};
     startup.cb = sizeof(startup);
-    PROCESS_INFORMATION process{};
-    std::vector<char> mutableCommand(shellCommand.begin(), shellCommand.end());
-    mutableCommand.push_back('\0');
+    startup.dwFlags = STARTF_USESTDHANDLES;
+    startup.hStdInput = nullptr;
+    startup.hStdOutput = logHandle;
+    startup.hStdError = logHandle;
 
-    const BOOL created = CreateProcessA(nullptr, mutableCommand.data(), nullptr, nullptr,
-                                        FALSE, CREATE_NO_WINDOW, nullptr, nullptr,
-                                        &startup, &process);
+    PROCESS_INFORMATION process{};
+    const BOOL created = CreateProcessW(nullptr, mutableCommand.data(), nullptr, nullptr,
+                                        TRUE, CREATE_NO_WINDOW, nullptr, nullptr, &startup,
+                                        &process);
+    CloseHandle(logHandle);
     if (!created) {
-        removeQuietly(commandFile);
-        error = "cannot start ffmpeg";
-        return false;
+        result.error = "cannot start ffmpeg";
+        return result;
     }
     WaitForSingleObject(process.hProcess, INFINITE);
     DWORD exitCode = 1;
     GetExitCodeProcess(process.hProcess, &exitCode);
     CloseHandle(process.hProcess);
     CloseHandle(process.hThread);
-    removeQuietly(commandFile);
 
     if (exitCode != 0) {
-        error = explainFfmpegFailure(tailOfFile(logFile));
-        removeQuietly(logFile);
-        return false;
+        result.error = explainFfmpegFailure(tailOfFile(narrow(logPath)));
+        removeQuietly(wavOut + ".log");
+        return result;
     }
-    removeQuietly(logFile);
-    return true;
+    removeQuietly(wavOut + ".log");
+    result.ok = true;
+    return result;
 }
+
+#else
+
+inline FfmpegResult runFfmpegToFile(const std::string& ffmpeg, const std::string& video,
+                                    const std::string& wavOut) {
+    FfmpegResult result;
+    const std::string logPath = wavOut + ".log";
+    const std::string command = "\"" + ffmpeg + "\" -nostdin -v error -y -i \"" + video
+                                + "\" -vn -ac 1 -ar " + std::to_string(kAudioSampleRate)
+                                + " -c:a pcm_s16le \"" + wavOut + "\" > \"" + logPath
+                                + "\" 2>&1";
+    if (std::system(command.c_str()) != 0) {
+        result.error = explainFfmpegFailure(tailOfFile(logPath));
+        removeQuietly(logPath);
+        return result;
+    }
+    removeQuietly(logPath);
+    result.ok = true;
+    return result;
+}
+
+#endif
 
 // Unique per call, not per process: audio for several files is fingerprinted
 // concurrently, and a process-wide name would make them overwrite each other's
@@ -361,31 +472,17 @@ inline unsigned long long nextTemporaryIndex() {
     return counter.fetch_add(1);
 }
 
+#ifdef _WIN32
 inline std::string temporaryPath(const std::string& suffix) {
-    char directory[MAX_PATH] = {0};
-    const DWORD length = GetTempPathA(MAX_PATH, directory);
-    std::string base = length > 0 ? std::string(directory) : std::string(".");
-    return base + "vividmatch_audio_" + std::to_string(GetCurrentProcessId()) + "_"
-           + std::to_string(nextTemporaryIndex()) + suffix;
+    wchar_t directory[MAX_PATH] = {0};
+    const DWORD length = GetTempPathW(MAX_PATH, directory);
+    const std::wstring base = length > 0 ? std::wstring(directory) : std::wstring(L".");
+    const std::wstring name = L"vividmatch_audio_" + std::to_wstring(GetCurrentProcessId())
+                              + L"_" + std::to_wstring(nextTemporaryIndex())
+                              + widen(suffix);
+    return narrow(base + name);
 }
 #else
-inline bool runFfmpegToFile(const std::string& ffmpeg, const std::string& video,
-                            const std::string& wavOut, std::string& error) {
-    const std::string command = "\"" + ffmpeg + "\" -nostdin -v error -y -i \"" + video
-                                + "\" -vn -ac 1 -ar " + std::to_string(kAudioSampleRate)
-                                + " -c:a pcm_s16le \"" + wavOut + "\" 2>/dev/null";
-    if (std::system(command.c_str()) != 0) {
-        error = "ffmpeg could not decode an audio track";
-        return false;
-    }
-    return true;
-}
-
-inline unsigned long long nextTemporaryIndex() {
-    static std::atomic<unsigned long long> counter{0};
-    return counter.fetch_add(1);
-}
-
 inline std::string temporaryPath(const std::string& suffix) {
     return "/tmp/vividmatch_audio_" + std::to_string(static_cast<long>(::getpid())) + "_"
            + std::to_string(nextTemporaryIndex()) + suffix;
@@ -495,10 +592,10 @@ inline AudioFingerprint fingerprintAudio(const std::string& path,
     }
 
     const std::string wav = detail::temporaryPath(".wav");
-    std::string error;
-    if (!detail::runFfmpegToFile(ffmpeg, path, wav, error)) {
+    const detail::FfmpegResult decoded = detail::runFfmpegToFile(ffmpeg, path, wav);
+    if (!decoded.ok) {
         detail::removeQuietly(wav);
-        fingerprint.error = error;
+        fingerprint.error = decoded.error;
         return fingerprint;
     }
 

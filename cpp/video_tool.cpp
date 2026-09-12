@@ -112,37 +112,65 @@ void usage() {
 
 }  // namespace
 
-int main(int argc, char** argv) {
-    try {
-        std::vector<std::string> args(argv + 1, argv + argc);
-        bool withAudio = true;
-        for (auto it = args.begin(); it != args.end();) {
-            if (*it == "--no-audio") {
-                withAudio = false;
-                it = args.erase(it);
-            } else {
-                ++it;
-            }
-        }
+namespace {
 
-        if (args.size() >= 3 && args[0] == "compare") {
-            double threshold = vividmatch::kDefaultFrameThreshold;
-            if (args.size() >= 4) {
-                try {
-                    threshold = std::stod(args[3]);
-                } catch (const std::exception&) {
-                    throw std::invalid_argument("invalid frame threshold: " + args[3]);
-                }
+int run(const std::vector<std::string>& rawArgs) {
+    std::vector<std::string> args = rawArgs;
+    bool withAudio = true;
+    for (auto it = args.begin(); it != args.end();) {
+        if (*it == "--no-audio") {
+            withAudio = false;
+            it = args.erase(it);
+        } else {
+            ++it;
+        }
+    }
+
+    if (args.size() >= 3 && args[0] == "compare") {
+        double threshold = vividmatch::kDefaultFrameThreshold;
+        if (args.size() >= 4) {
+            try {
+                threshold = std::stod(args[3]);
+            } catch (const std::exception&) {
+                throw std::invalid_argument("invalid frame threshold: " + args[3]);
             }
-            return compareVideos(args[1], args[2], threshold, withAudio);
         }
-        if (args.size() == 2 && args[0] == "summary") {
-            return printSummary(args[1], withAudio);
+        return compareVideos(args[1], args[2], threshold, withAudio);
+    }
+    if (args.size() == 2 && args[0] == "summary") {
+        return printSummary(args[1], withAudio);
+    }
+    usage();
+    return 2;
+}
+
+}  // namespace
+
+#ifdef _WIN32
+// Windows hands main() the arguments in the ANSI code page, so a Chinese or
+// Japanese file name arrives already mangled. wmain() gives them as UTF-16 and
+// they are converted to UTF-8 here, which is what the fingerprint code (and
+// ffmpeg) expects.
+int wmain(int argc, wchar_t** argv) {
+    try {
+        std::vector<std::string> args;
+        args.reserve(static_cast<std::size_t>(argc));
+        for (int i = 1; i < argc; ++i) {
+            args.push_back(vividmatch::detail::narrow(argv[i]));
         }
-        usage();
-        return 2;
+        return run(args);
     } catch (const std::exception& error) {
         std::cerr << "error: " << error.what() << '\n';
         return 2;
     }
 }
+#else
+int main(int argc, char** argv) {
+    try {
+        return run(std::vector<std::string>(argv + 1, argv + argc));
+    } catch (const std::exception& error) {
+        std::cerr << "error: " << error.what() << '\n';
+        return 2;
+    }
+}
+#endif

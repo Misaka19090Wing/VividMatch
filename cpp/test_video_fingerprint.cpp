@@ -352,6 +352,46 @@ int main(int argc, char** argv) {
                 "an unrecognised ffmpeg failure falls back to a generic message");
         }
 
+        // --- non-ASCII paths must reach ffmpeg intact -----------------------
+        // ffmpeg used to be launched through a .cmd file, which cmd.exe reads
+        // in the OEM code page: a Chinese file name then arrived as mojibake and
+        // the audio layer reported a decode failure for a file that was fine.
+        {
+            const std::string unicodePath = directory + "/vm_\xe4\xb8\xad\xe6\x96\x87.mp4";
+            std::remove(unicodePath.c_str());
+            std::ifstream source(path_a, std::ios::binary);
+            std::ofstream target(unicodePath, std::ios::binary);
+            target << source.rdbuf();
+            target.close();
+            source.close();
+
+            failures += expect(vividmatch::detail::fileExists(unicodePath),
+                               "test setup: a copy with a non-ASCII name exists");
+
+            // The visual path uses OpenCV, which handles it either way.
+            const VideoFingerprint visual = vividmatch::fingerprintVideo(unicodePath);
+            failures += expect(!visual.frames.empty(),
+                               "video fingerprint reads a non-ASCII path");
+
+            // The audio path shells out to ffmpeg, which is where this broke.
+            // These synthetic clips carry no audio, so ffmpeg is expected to
+            // answer "no audio track" - the point is that it answers at all,
+            // having actually opened the file under its non-ASCII name.
+            const vividmatch::AudioFingerprint audio =
+                vividmatch::fingerprintAudio(unicodePath);
+            std::cout << "   non-ASCII path audio: available=" << audio.available
+                      << " error=\"" << audio.error << "\"\n";
+            failures += expect(
+                audio.error.find("could not find or open") == std::string::npos,
+                "a non-ASCII path is not reported as unopenable");
+            failures += expect(
+                audio.available
+                    || audio.error.find("no audio track") != std::string::npos,
+                "a non-ASCII path is decoded (or honestly reported as silent)");
+
+            std::remove(unicodePath.c_str());
+        }
+
         // --- the longest increasing run itself ------------------------------
         {
             const std::vector<std::pair<int, int>> ordered = {{0, 0}, {1, 1}, {2, 2}};

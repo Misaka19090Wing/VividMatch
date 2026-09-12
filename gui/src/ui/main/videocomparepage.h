@@ -71,6 +71,14 @@ private slots:
     void onThreadFinished();
 
 private:
+#ifdef VIVIDMATCH_TEST_HOOKS
+    // Only compiled when a test harness asks for it. Loading a clip and starting
+    // a comparison cannot be driven from outside otherwise: the file dialog is
+    // native, and SendKeys cannot type CJK paths, so an automated run would
+    // silently select nothing.
+    friend class VideoComparePageTestHook;
+#endif
+
     void chooseVideo(int slot);
     void setVideoPath(int slot, const QString& path);
     void refreshPreview(int slot);
