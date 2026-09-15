@@ -10,8 +10,9 @@ Run from the repository root, with GITHUB_TOKEN set:
     set GITHUB_TOKEN=ghp_xxx
     python tests/release/publish_release.py
 
-The token needs "repo" scope. Nothing here is destructive: an existing release for
-the tag is left alone unless --replace is passed.
+The token needs "repo" scope, and is not needed for --dry-run. Nothing here is
+destructive: an existing release for the tag is left alone unless --replace is
+passed.
 """
 
 from __future__ import annotations
@@ -34,13 +35,6 @@ API_VERSION = "2022-11-28"
 ROOT = pathlib.Path(__file__).resolve().parents[2]
 NOTES = ROOT / "dist" / "RELEASE_NOTES.md"
 ASSETS = ["VividMatch-0.1.0-windows-x64.zip"]
-
-
-def token() -> str:
-    value = os.environ.get("GITHUB_TOKEN", "").strip()
-    if not value:
-        sys.exit("GITHUB_TOKEN is not set")
-    return value
 
 
 def request(method: str, url: str, bearer: str, *, data: bytes | None = None,
@@ -83,7 +77,7 @@ def main() -> int:
                         help="report what would be sent and stop")
     args = parser.parse_args()
 
-    bearer = token()
+    bearer = os.environ.get("GITHUB_TOKEN", "").strip()
 
     if not NOTES.is_file():
         sys.exit(f"missing {NOTES}")
@@ -100,9 +94,12 @@ def main() -> int:
         size = (ROOT / "dist" / name).stat().st_size
         print(f"asset:    {name} ({size / 1024 / 1024:.1f} MB)")
 
+    # Checked after the dry run so the report is available without a token.
     if args.dry_run:
         print("dry run: nothing sent")
         return 0
+    if not bearer:
+        sys.exit("GITHUB_TOKEN is not set; it needs \"repo\" scope")
 
     existing = find_release(bearer)
     if existing is not None and not args.replace:
