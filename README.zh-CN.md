@@ -232,3 +232,11 @@ python -m vividmatch.cli compare first.png second.png
 python -m vividmatch.cli search query.png candidates_dir/
 python -m vividmatch.cli hash image.png
 ```
+
+## 许可证
+
+MIT，见 [`LICENSE`](LICENSE)。
+
+`THIRD-PARTY-NOTICES.md` 记录了本项目借用与打包的第三方内容：界面的窗口／页面结构与
+CMake 布局来自 [XMuli/myapp-template](https://github.com/XMuli/myapp-template)；
+`dist/` 中的便携版以独立动态库形式附带 Qt 与 OpenCV，各自适用其自身条款。

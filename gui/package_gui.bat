@@ -31,6 +31,11 @@ if exist "%GUI_DIR%\bin\translations" (
     copy /Y "%GUI_DIR%\bin\translations\*.qm" "%STAGE%\translations\" >nul
 )
 
+rem The licence and the third-party notices travel with the package: it bundles Qt
+rem and OpenCV, so the copy has to carry their terms as well.
+if exist "%GUI_DIR%\..\LICENSE" copy /Y "%GUI_DIR%\..\LICENSE" "%STAGE%\" >nul
+if exist "%GUI_DIR%\..\THIRD-PARTY-NOTICES.md" copy /Y "%GUI_DIR%\..\THIRD-PARTY-NOTICES.md" "%STAGE%\" >nul
+
 for /f "delims=" %%F in ('dir /b /a-d "%OPENCV_BIN%\opencv_world*.dll" 2^>nul ^| findstr /v /e /i "d.dll"') do (
     copy /Y "%OPENCV_BIN%\%%F" "%STAGE%\" >nul
 )

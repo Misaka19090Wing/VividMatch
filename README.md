@@ -269,3 +269,13 @@ python -m vividmatch.cli compare first.png second.png
 python -m vividmatch.cli search query.png candidates_dir/
 python -m vividmatch.cli hash image.png
 ```
+
+## Licence
+
+MIT; see [`LICENSE`](LICENSE).
+
+`THIRD-PARTY-NOTICES.md` records what the project borrows and bundles: the GUI's
+window/page structure and CMake layout come from
+[XMuli/myapp-template](https://github.com/XMuli/myapp-template), and the portable
+build in `dist/` ships Qt and OpenCV as separate dynamic libraries under their own
+terms.
