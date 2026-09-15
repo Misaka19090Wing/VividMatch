@@ -180,6 +180,32 @@ gui\package_gui.bat
 
 便携版输出到 `dist\VividMatchGui\`，无需安装 Qt 或 OpenCV 即可直接运行。
 
+## 发布
+
+版本号 `0.1.0` 写在三处，改动时必须同步：`gui/CMakeLists.txt` 的
+`project(... VERSION ...)`、`gui/src/ui/main/mainwin.cpp` 里的页脚文本、
+`vividmatch/__init__.py`。
+
+发布流程：
+
+```bat
+gui\build_gui.bat
+gui\package_gui.bat
+release_publish.bat
+```
+
+`package_gui.bat` 产出 `dist\VividMatchGui\`；0.1.0 已把它打包为
+`dist\VividMatch-0.1.0-windows-x64.zip`（压缩后 40 MB，解压后 106 MB）。随后
+`release_publish.bat` 推送 `v0.1.0` 标签并创建 GitHub Release、附上该 zip。它需要一个
+具备 `repo` 权限的 `GITHUB_TOKEN`。
+
+```bash
+python tests/release/publish_release.py --dry-run
+```
+
+只报告将发送的内容，不实际发送。Release 正文取自与 zip 同目录的
+`dist/RELEASE_NOTES.md` —— 该文件不由 `package_gui.bat` 生成。
+
 ## 样例图片
 
 `samples/` 里是用于手动验证的生成图片：

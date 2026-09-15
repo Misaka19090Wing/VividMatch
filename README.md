@@ -214,6 +214,33 @@ gui\package_gui.bat
 The portable app is written to `dist\VividMatchGui\` and can be run there
 without installing Qt or OpenCV.
 
+## Releases
+
+The version is `0.1.0`, in three places that have to move together:
+`gui/CMakeLists.txt` (`project(... VERSION ...)`), the footer label in
+`gui/src/ui/main/mainwin.cpp`, and `vividmatch/__init__.py`.
+
+To publish a release:
+
+```bat
+gui\build_gui.bat
+gui\package_gui.bat
+release_publish.bat
+```
+
+`package_gui.bat` writes `dist\VividMatchGui\`; for 0.1.0 that folder was zipped as
+`dist\VividMatch-0.1.0-windows-x64.zip` (40 MB, and 106 MB unpacked). Then
+`release_publish.bat` pushes the `v0.1.0` tag and creates the GitHub release with
+the zip attached. It needs a `GITHUB_TOKEN` with `repo` scope.
+
+```bash
+python tests/release/publish_release.py --dry-run
+```
+
+reports exactly what would be sent without sending anything. The release body comes
+from `dist/RELEASE_NOTES.md`, which sits next to the zip; `package_gui.bat` does not
+generate it.
+
 ## Sample images
 
 `samples/` holds generated pictures for exercising the tools by hand:
