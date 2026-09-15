@@ -28,12 +28,15 @@ OUT_DIR = ROOT / "i18n"
 TS_NAME = "vividmatch_zh_CN.ts"
 QM_NAME = "vividmatch_zh_CN.qm"
 
-# Where lrelease may live, in the order they are tried. The build machine here
-# has the Qt Linguist tools installed separately from Qt itself.
+# Where lrelease may live, in the order they are tried. The Qt Linguist tools are
+# often installed separately from Qt itself, which is why a standalone
+# installation is listed alongside the Qt ones.
 LRELEASE_CANDIDATES = [
     ROOT / "tools" / "lrelease.exe",
     pathlib.Path("E:/linguist_6.11.0/lrelease.exe"),
     pathlib.Path("C:/Qt/6.8.3/msvc2022_64/bin/lrelease.exe"),
+    pathlib.Path("C:/Qt/6.8.2/msvc2022_64/bin/lrelease.exe"),
+    pathlib.Path("D:/Qt/6.8.3/msvc2022_64/bin/lrelease.exe"),
 ]
 
 
