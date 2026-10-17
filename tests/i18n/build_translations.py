@@ -72,7 +72,9 @@ def write_ts(mapping: dict[str, dict[str, str]]) -> pathlib.Path:
 
     OUT_DIR.mkdir(parents=True, exist_ok=True)
     target = OUT_DIR / TS_NAME
-    target.write_text(text, encoding="utf-8")
+    # Always write LF: this file is version controlled, and Windows would
+    # otherwise turn every build into a full-file line-ending diff.
+    target.write_text(text, encoding="utf-8", newline="\n")
     return target
 
 

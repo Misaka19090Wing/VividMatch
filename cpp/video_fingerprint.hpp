@@ -112,6 +112,12 @@ struct VideoComparison {
     // Share of the shorter video's sampled frames that the monotonic chain
     // accounts for.
     double coverage = 0.0;
+    // Share of the shorter video's timeline between the first and last chain
+    // sample. A high value with a low coverage means the two videos match
+    // sparsely but across the whole clip - the picture timing drifted (a
+    // re-timed or frame-interpolated copy), rather than only the opening being
+    // shared.
+    double spanCoverage = 0.0;
     // Share of the matched left frames that the monotonic chain advances
     // through; below kVerdictRunRatio the timeline jumped.
     double runRatio = 0.0;
@@ -428,6 +434,14 @@ inline VideoComparison compareVideoFingerprints(
             result.scores[static_cast<std::size_t>(lastPair.first)]
                          [static_cast<std::size_t>(lastPair.second)]
                              .score;
+
+        const int firstShorter = leftIsShorter ? firstPair.first : firstPair.second;
+        const int lastShorter = leftIsShorter ? lastPair.first : lastPair.second;
+        result.spanCoverage =
+            result.shorterFrames > 1
+                ? static_cast<double>(lastShorter - firstShorter + 1)
+                      / result.shorterFrames
+                : 1.0;
     }
 
     // Audio layer: measured only over the seconds that aligned visually.
@@ -460,9 +474,13 @@ inline VideoComparison compareVideoFingerprints(
         result.verdict = VideoVerdict::Reencoded;
         return result;
     }
-    if (!samePictures && result.audio.available && result.audio.sameSoundtrack) {
+    if (!samePictures && result.audio.available && result.audio.sameSoundtrack
+        && result.spanCoverage >= kVerdictCoverage) {
         // 画面匹配低 + 音频匹配高: the "audio veto" case, where the picture is
-        // heavily obscured but the sound gives it away.
+        // heavily obscured or its frame timing drifted but the sound gives it
+        // away. The alignment must span the clip: otherwise a shared opening
+        // with the same opening audio would be rescued into "identical" even
+        // though the rest of the two videos differs.
         result.verdict = VideoVerdict::Identical;
         return result;
     }

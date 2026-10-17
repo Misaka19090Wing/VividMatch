@@ -79,9 +79,42 @@ struct VideoBatchGroup {
     int preferred = -1;         // index the ranking function picked, or -1
 };
 
+// Compact per-pair record for reporting.
+//
+// The full VideoComparison keeps an s x s score matrix and the alignment, which
+// is far too heavy to retain for every pair of a large batch. These are the
+// values a log or a report actually reads, copied out once the pair has been
+// judged (including the audio re-judgement, when it happened).
+struct VideoBatchPair {
+    int left = 0;
+    int right = 0;
+    double signature = 0.0;  // signature similarity that let it through
+    VideoVerdict verdict = VideoVerdict::Different;
+    bool counts = false;     // Identical or Reencoded, so it merged the group
+    double coverage = 0.0;
+    double spanCoverage = 0.0;  // first-to-last chain sample over the clip
+    double runRatio = 0.0;
+    double meanScore = 0.0;
+    double bestScore = 0.0;
+    int matches = 0;
+    int monotonicRun = 0;
+    int leftSamples = 0;
+    int rightSamples = 0;
+    AudioComparison audio;
+    bool audioRejudged = false;  // the pair was judged again after audio
+    double compareMs = 0.0;
+};
+
 struct VideoBatchResult {
     std::vector<VideoBatchItem> items;
     std::vector<VideoBatchGroup> groups;
+    // Every pair that passed the signature prefilter, in discovery order. Pairs
+    // dropped by the prefilter are not stored (there can be quadratically many);
+    // signatureRejects counts them per clip instead.
+    // shortcut: all candidates are retained for reporting; a low signature
+    // threshold can make this O(n^2), store a bounded sample instead.
+    std::vector<VideoBatchPair> pairs;
+    std::vector<int> signatureRejects;  // per item: pairs skipped by the prefilter
     int failed = 0;
     // Work actually done, for reporting and for sizing a bigger run.
     int pairCandidates = 0;  // pairs that passed the signature prefilter
@@ -209,6 +242,19 @@ inline bool batchEdgeCounts(VideoVerdict verdict) {
     return verdict == VideoVerdict::Identical || verdict == VideoVerdict::Reencoded;
 }
 
+// Whether this pair is worth the audio layer.
+//
+// `identical`/`reencoded` already count. A `partial` whose chain spans the whole
+// clip is the case where the picture timing drifted (a frame-interpolated or
+// re-timed copy) and the soundtrack can still prove it is one video. A partial
+// that only covers the opening has a low span and is left alone, so a shared
+// opening is not rescued by the opening's audio.
+inline bool batchWantsAudio(const VideoComparison& comparison) {
+    return batchEdgeCounts(comparison.verdict)
+           || (comparison.verdict == VideoVerdict::Partial
+               && comparison.spanCoverage >= kVerdictCoverage);
+}
+
 // Fingerprints every clip, then groups the ones that are the same video.
 //
 // `progress` is called with (done, total, stage label) from worker threads and
@@ -233,6 +279,7 @@ inline VideoBatchResult compareVideoBatch(
     const std::function<void(int, int, const std::string&)>& progress) {
     VideoBatchResult result;
     result.items.resize(paths.size());
+    result.signatureRejects.assign(paths.size(), 0);
     for (std::size_t i = 0; i < paths.size(); ++i) {
         result.items[i].path = paths[i];
     }
@@ -298,8 +345,10 @@ inline VideoBatchResult compareVideoBatch(
     struct Edge {
         int left = 0;
         int right = 0;
+        double signature = 0.0;
         VideoComparison comparison;
         bool compared = false;
+        bool audioRejudged = false;
     };
     std::vector<Edge> edges;
     for (int i = 0; i < itemCount; ++i) {
@@ -314,9 +363,11 @@ inline VideoBatchResult compareVideoBatch(
                 signatureSimilarity(result.items[static_cast<std::size_t>(i)].signature,
                                     result.items[static_cast<std::size_t>(j)].signature);
             if (signature < signatureThreshold) {
+                ++result.signatureRejects[static_cast<std::size_t>(i)];
+                ++result.signatureRejects[static_cast<std::size_t>(j)];
                 continue;
             }
-            edges.push_back({i, j, VideoComparison(), false});
+            edges.push_back({i, j, signature, VideoComparison(), false, false});
         }
     }
     result.pairCandidates = static_cast<int>(edges.size());
@@ -358,14 +409,15 @@ inline VideoBatchResult compareVideoBatch(
             .count();
     result.pairsCompared = static_cast<int>(edges.size());
 
-    // --- 3. audio, only where the pictures already matched -----------------
-    // A re-cut keeps the picture and swaps the soundtrack, and that is worth
-    // distinguishing, but extracting audio for the whole batch would cost an
-    // ffmpeg process per clip for nothing.
+    // --- 3. audio, only where it can change the answer ---------------------
+    // A re-cut keeps the picture and swaps the soundtrack, and a re-timed copy
+    // matches sparsely but across the whole clip; both need the audio layer. A
+    // shared opening does not, and is exactly the case that must not be rescued
+    // by it, so it is not extracted for.
     std::vector<int> audioWanted;
     std::vector<bool> audioNeeded(paths.size(), false);
     for (const Edge& edge : edges) {
-        if (!edge.compared || !batchEdgeCounts(edge.comparison.verdict)) {
+        if (!edge.compared || !batchWantsAudio(edge.comparison)) {
             continue;
         }
         for (const int index : {edge.left, edge.right}) {
@@ -401,7 +453,7 @@ inline VideoBatchResult compareVideoBatch(
 
         // Re-judge those edges now that the soundtrack is known.
         for (Edge& edge : edges) {
-            if (!edge.compared || !batchEdgeCounts(edge.comparison.verdict)) {
+            if (!edge.compared || !batchWantsAudio(edge.comparison)) {
                 continue;
             }
             const VideoFingerprint& left =
@@ -409,7 +461,37 @@ inline VideoBatchResult compareVideoBatch(
             const VideoFingerprint& right =
                 result.items[static_cast<std::size_t>(edge.right)].fingerprint;
             edge.comparison = compareVideoFingerprints(left, right, frameThreshold);
+            edge.audioRejudged = true;
         }
+    }
+
+    // Copy the compact per-pair numbers out before the comparisons themselves go
+    // out of scope. This is what a caller logs or reports; retaining the full
+    // score matrices would cost O(s^2) per pair.
+    result.pairs.reserve(edges.size());
+    for (const Edge& edge : edges) {
+        if (!edge.compared) {
+            continue;
+        }
+        VideoBatchPair pair;
+        pair.left = edge.left;
+        pair.right = edge.right;
+        pair.signature = edge.signature;
+        pair.verdict = edge.comparison.verdict;
+        pair.counts = batchEdgeCounts(pair.verdict);
+        pair.coverage = edge.comparison.coverage;
+        pair.spanCoverage = edge.comparison.spanCoverage;
+        pair.runRatio = edge.comparison.runRatio;
+        pair.meanScore = edge.comparison.meanScore;
+        pair.bestScore = edge.comparison.bestMatchScore;
+        pair.matches = static_cast<int>(edge.comparison.matches.size());
+        pair.monotonicRun = edge.comparison.monotonicRun;
+        pair.leftSamples = edge.comparison.leftFrames;
+        pair.rightSamples = edge.comparison.rightFrames;
+        pair.audio = edge.comparison.audio;
+        pair.audioRejudged = edge.audioRejudged;
+        pair.compareMs = edge.comparison.elapsedMs;
+        result.pairs.push_back(std::move(pair));
     }
 
     // --- 4. group by the edges that count ----------------------------------

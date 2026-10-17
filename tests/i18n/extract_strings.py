@@ -27,7 +27,10 @@ GUI_SRC = ROOT / "gui" / "src"
 # class, which for these files is the file's class, so the stem is the context.
 CONTEXT_BY_FILE = {
     "mainwin": "MainWin",
+    "comparisonlog": "ComparisonLogWidget",
+    "keeppolicydialog": "KeepPolicyDialog",
     "imagecomparepage": "ImageComparePage",
+    "batchcompareworker": "BatchCompareWorker",
     "batchcomparepage": "BatchComparePage",
     "videocomparepage": "VideoComparePage",
     "videobatchpage": "VideoBatchPage",

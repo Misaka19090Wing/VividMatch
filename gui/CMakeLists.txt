@@ -20,6 +20,11 @@ qt_add_executable(VividMatchGui WIN32
     src/main.cpp
     src/ui/main/mainwin.cpp
     src/ui/main/mainwin.h
+    src/ui/main/comparisonlog.cpp
+    src/ui/main/comparisonlog.h
+    src/ui/main/keeppolicy.h
+    src/ui/main/keeppolicydialog.cpp
+    src/ui/main/keeppolicydialog.h
     src/ui/main/imagecomparepage.cpp
     src/ui/main/imagecomparepage.h
     src/ui/main/batchcompareworker.cpp

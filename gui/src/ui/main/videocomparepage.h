@@ -16,6 +16,7 @@ class QLabel;
 class QProgressBar;
 class QPushButton;
 class QThread;
+class ComparisonLogWidget;
 
 // Carries the whole comparison result back to the UI thread.
 Q_DECLARE_METATYPE(vividmatch::VideoComparison)
@@ -35,6 +36,10 @@ public slots:
 
 signals:
     void progress(const QString& message);
+    // Detailed log line; the level is a ComparisonLogLevel value. Keeping the
+    // worker free of widgets is what lets it emit per-stage numbers without
+    // touching the UI thread.
+    void logMessage(int level, const QString& message);
     // elapsedMs is the wall time the two extraction stages took together; the
     // comparison carries its own timing for the stage after them.
     void finished(vividmatch::VideoComparison comparison, qint64 elapsedMs);
@@ -70,6 +75,7 @@ private slots:
     void chooseSecondVideo();
     void startCompare();
     void onWorkerProgress(const QString& message);
+    void onWorkerLog(int level, const QString& message);
     void onCompareFinished(vividmatch::VideoComparison comparison, qint64 extractionMs);
     void onCompareFailed(const QString& message);
     void onThreadFinished();
@@ -107,6 +113,7 @@ private:
     QPushButton* m_compareButton;
     QDoubleSpinBox* m_threshold;
     QCheckBox* m_audioCheck;
+    ComparisonLogWidget* m_log;
 
     QString m_firstPath;
     QString m_secondPath;

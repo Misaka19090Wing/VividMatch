@@ -1,13 +1,14 @@
 #include "batchcomparepage.h"
 
+#include "comparisonlog.h"
 #include "formatutils.h"
+#include "keeppolicydialog.h"
 
 #include <QAction>
 #include <QApplication>
 #include <QBrush>
 #include <QClipboard>
 #include <QColor>
-#include <QComboBox>
 #include <QDesktopServices>
 #include <QDirIterator>
 #include <QDragEnterEvent>
@@ -29,6 +30,7 @@
 #include <QPainter>
 #include <QProgressBar>
 #include <QPushButton>
+#include <QSettings>
 #include <QShortcut>
 #include <QStyle>
 #include <QStyledItemDelegate>
@@ -47,6 +49,7 @@ namespace {
 constexpr int kRecordIdRole = Qt::UserRole + 1;
 constexpr int kGroupBaseRole = Qt::UserRole + 2;
 constexpr int kThumbnailImageRole = Qt::UserRole + 3;
+constexpr int kGroupDuplicateRole = Qt::UserRole + 4;
 
 // Padding kept between the thumbnail column edges and the thumbnail itself.
 constexpr int kThumbnailPadding = 8;
@@ -261,13 +264,14 @@ BatchComparePage::BatchComparePage(QWidget* parent)
     : QWidget(parent)
     , m_tree(new QTreeWidget(this))
     , m_progress(new QProgressBar(this))
-    , m_policy(new QComboBox(this))
+    , m_policyButton(nullptr)
     , m_search(new QLineEdit(this))
     , m_invertButton(nullptr)
     , m_removeButton(nullptr)
     , m_deleteButton(nullptr)
     , m_compareButton(nullptr)
     , m_status(new QLabel(this))
+    , m_log(new ComparisonLogWidget(this))
     , m_backButton(nullptr)
     , m_titleLabel(nullptr)
     , m_addFolderButton(nullptr)
@@ -341,20 +345,19 @@ BatchComparePage::BatchComparePage(QWidget* parent)
     controls->addSpacing(12);
     m_policyLabel = new QLabel(this);
     controls->addWidget(m_policyLabel);
-    // The items are added in retranslate(), where the texts can be replaced on a
-    // language switch; the data is what identifies each policy.
-    m_policy->addItem(QString(), static_cast<int>(SelectionPolicy::HighestResolution));
-    m_policy->addItem(QString(), static_cast<int>(SelectionPolicy::LowestResolution));
-    m_policy->addItem(QString(), static_cast<int>(SelectionPolicy::LargestFile));
-    m_policy->addItem(QString(), static_cast<int>(SelectionPolicy::SmallestFile));
-    m_policy->addItem(QString(), static_cast<int>(SelectionPolicy::NewestModified));
-    m_policy->addItem(QString(), static_cast<int>(SelectionPolicy::OldestModified));
-    m_policy->addItem(QString(), static_cast<int>(SelectionPolicy::HighestBitDepth));
-    m_policy->addItem(QString(), static_cast<int>(SelectionPolicy::LowestBitDepth));
-    m_policy->addItem(QString(), static_cast<int>(SelectionPolicy::KeepAll));
-    m_policy->setCurrentIndex(0);
-    controls->addWidget(m_policy);
+    m_policyButton = new QPushButton(this);
+    m_policyButton->setObjectName(QStringLiteral("secondaryButton"));
+    connect(m_policyButton, &QPushButton::released, this,
+            &BatchComparePage::editKeepPolicy);
+    controls->addWidget(m_policyButton);
     root->addLayout(controls);
+
+    QSettings settings;
+    m_keepRules = decodeKeepRules(settings.value(QStringLiteral("batchImage/keepRules"))
+                                      .toStringList(),
+                                  true);
+    m_keepAll = settings.value(QStringLiteral("batchImage/keepAll"), false).toBool();
+    updatePolicyButton();
 
     QHBoxLayout* searchRow = new QHBoxLayout;
     m_searchLabel = new QLabel(this);
@@ -418,6 +421,7 @@ BatchComparePage::BatchComparePage(QWidget* parent)
     m_tree->installEventFilter(this);
     m_tree->viewport()->installEventFilter(this);
     root->addWidget(m_tree, 1);
+    root->addWidget(m_log);
 
     m_status->setStyleSheet(QStringLiteral("color:#64748b;"));
     root->addWidget(m_status);
@@ -450,9 +454,11 @@ void BatchComparePage::retranslate()
     m_addImagesButton->setText(tr("Choose images"));
     m_invertButton->setText(tr("Invert"));
     m_removeButton->setText(tr("Remove checked"));
-    m_deleteButton->setText(tr("Delete checked files"));
+    m_deleteButton->setText(tr("Move to Recycle Bin"));
     m_compareButton->setText(tr("Start comparison"));
     m_policyLabel->setText(tr("Selection policy"));
+    m_policyButton->setText(tr("Edit priorities..."));
+    updatePolicyButton();
     m_searchLabel->setText(tr("Locate"));
     m_search->setPlaceholderText(tr("Ctrl+F to search name or path"));
 
@@ -473,30 +479,6 @@ void BatchComparePage::retranslate()
         tr("Click: ascending / descending / unsorted\n"
            "Ctrl+click: add a secondary sort field\n"
            "Right-click: show or hide columns; drag headers to reorder"));
-
-    // The policy entries are re-labelled in place, matched by their data so the
-    // user's current choice survives.
-    struct PolicyText {
-        SelectionPolicy policy;
-        const char* text;
-    };
-    const PolicyText policies[] = {
-        {SelectionPolicy::HighestResolution, QT_TR_NOOP("Highest resolution")},
-        {SelectionPolicy::LowestResolution, QT_TR_NOOP("Lowest resolution")},
-        {SelectionPolicy::LargestFile, QT_TR_NOOP("Largest file")},
-        {SelectionPolicy::SmallestFile, QT_TR_NOOP("Smallest file")},
-        {SelectionPolicy::NewestModified, QT_TR_NOOP("Newest modified")},
-        {SelectionPolicy::OldestModified, QT_TR_NOOP("Oldest modified")},
-        {SelectionPolicy::HighestBitDepth, QT_TR_NOOP("Highest bit depth")},
-        {SelectionPolicy::LowestBitDepth, QT_TR_NOOP("Lowest bit depth")},
-        {SelectionPolicy::KeepAll, QT_TR_NOOP("Keep everything checked")},
-    };
-    for (const PolicyText& entry : policies) {
-        const int index = m_policy->findData(static_cast<int>(entry.policy));
-        if (index >= 0) {
-            m_policy->setItemText(index, tr(entry.text));
-        }
-    }
 
     // Group headings and the status line are derived from state, so they are
     // regenerated rather than stored.
@@ -593,6 +575,11 @@ void BatchComparePage::startCompare()
     m_removeButton->setEnabled(false);
     m_deleteButton->setEnabled(false);
     m_search->setEnabled(false);
+    m_policyButton->setEnabled(false);
+
+    m_log->clear();
+    m_log->info(tr("Keep policy: %1")
+                    .arg(keepPrioritySummary(m_keepRules, m_keepAll)));
 
     m_worker = new BatchCompareWorker(paths, 0.78);
     m_thread = new QThread(this);
@@ -600,6 +587,8 @@ void BatchComparePage::startCompare()
     connect(m_thread, &QThread::started, m_worker, &BatchCompareWorker::run);
     connect(m_worker, &BatchCompareWorker::progressChanged,
             this, &BatchComparePage::onProgressChanged, Qt::QueuedConnection);
+    connect(m_worker, &BatchCompareWorker::logMessage, this,
+            &BatchComparePage::onWorkerLog, Qt::QueuedConnection);
     connect(m_worker, &BatchCompareWorker::finished,
             this, &BatchComparePage::compareFinished, Qt::QueuedConnection);
     connect(m_worker, &BatchCompareWorker::failed,
@@ -615,6 +604,11 @@ void BatchComparePage::startCompare()
     m_progress->setValue(0);
     m_progress->setFormat(tr("Comparing..."));
     m_thread->start();
+}
+
+void BatchComparePage::onWorkerLog(int level, const QString& message)
+{
+    m_log->append(static_cast<ComparisonLogLevel>(level), message);
 }
 
 void BatchComparePage::compareFinished(QVector<BatchCluster> clusters, qint64 elapsedMs)
@@ -656,6 +650,7 @@ void BatchComparePage::onCompareThreadFinished()
     m_deleteButton->setEnabled(true);
     m_compareButton->setEnabled(true);
     m_search->setEnabled(true);
+    m_policyButton->setEnabled(true);
     updateStatus();
 }
 
@@ -878,12 +873,12 @@ void BatchComparePage::rebuildGroupedTree(QVector<BatchCluster> clusters)
             continue;
         }
 
-        const SelectionPolicy policy = currentPolicy();
-        const int winner = policy == SelectionPolicy::KeepAll ? -1 : chooseWinnerId(ids);
+        const int winner = m_keepAll ? -1 : chooseWinnerId(ids);
         QTreeWidgetItem* group = createGroup(
             tr("Similar group - similarity %1%").arg(cluster.similarity * 100.0, 0, 'f', 1));
+        group->setData(CheckColumn, kGroupDuplicateRole, true);
         for (const int id : ids) {
-            group->addChild(createChildItem(id, policy == SelectionPolicy::KeepAll || id == winner));
+            group->addChild(createChildItem(id, m_keepAll || id == winner));
         }
         sortGroupChildren(group);
     }
@@ -1014,34 +1009,36 @@ void BatchComparePage::setItemsChecked(const QVector<QTreeWidgetItem*>& items, b
 void BatchComparePage::deleteFiles(const QVector<QTreeWidgetItem*>& items)
 {
     if (items.isEmpty()) {
-        QMessageBox::information(this, tr("Delete files"),
-                                 tr("Select or check the images to delete first."));
+        QMessageBox::information(
+            this, tr("Move to Recycle Bin"),
+            tr("Select or check the images to move to the Recycle Bin first."));
         return;
     }
 
     if (QMessageBox::question(
-            this, tr("Delete files"),
-            tr("This permanently deletes %1 image files from disk. Continue?")
+            this, tr("Move to Recycle Bin"),
+            tr("Move %1 image files to the Recycle Bin?\n\nThe files can be "
+               "restored from there.")
                 .arg(items.size()))
         != QMessageBox::Yes) {
         return;
     }
 
-    QVector<QTreeWidgetItem*> deleted;
+    QVector<QTreeWidgetItem*> moved;
     QStringList errors;
     for (QTreeWidgetItem* item : items) {
         const RowData* row = recordForItem(item);
-        if (row && QFile::remove(row->path)) {
-            deleted.append(item);
+        if (row && QFile::moveToTrash(row->path)) {
+            moved.append(item);
         } else if (row) {
             errors.append(row->path);
         }
     }
-    removeItems(deleted);
+    removeItems(moved);
     if (!errors.isEmpty()) {
         QMessageBox::warning(
-            this, tr("Delete files"),
-            tr("These %1 files could not be deleted:\n%2")
+            this, tr("Move to Recycle Bin"),
+            tr("These %1 files could not be moved to the Recycle Bin:\n%2")
                 .arg(errors.size())
                 .arg(errors.join(QLatin1Char('\n'))));
     }
@@ -1049,67 +1046,104 @@ void BatchComparePage::deleteFiles(const QVector<QTreeWidgetItem*>& items)
 
 int BatchComparePage::chooseWinnerId(const QVector<int>& recordIds) const
 {
-    if (recordIds.isEmpty()) {
+    if (recordIds.isEmpty() || m_keepAll) {
         return -1;
     }
-    const SelectionPolicy policy = currentPolicy();
-    if (policy == SelectionPolicy::KeepAll) {
-        return -1;
-    }
-
-    const bool highest =
-        policy == SelectionPolicy::HighestResolution
-        || policy == SelectionPolicy::LargestFile
-        || policy == SelectionPolicy::NewestModified
-        || policy == SelectionPolicy::HighestBitDepth;
 
     int winner = recordIds.first();
-    qint64 winnerValue = policyValue(m_records.value(winner));
     for (const int id : recordIds) {
-        const qint64 value = policyValue(m_records.value(id));
-        if ((highest && value > winnerValue) || (!highest && value < winnerValue)) {
-            winner = id;
-            winnerValue = value;
-        }
-    }
-
-    // Exact copies may differ only by name. In that case the most recently
-    // modified file wins, regardless of the selected primary policy.
-    const RowData& winningRow = m_records.value(winner);
-    for (const int id : recordIds) {
-        const RowData& row = m_records.value(id);
-        if (id != winner && policyValue(row) == winnerValue
-            && row.modified > winningRow.modified) {
+        if (id != winner
+            && betterByRules(m_records.value(id), m_records.value(winner))) {
             winner = id;
         }
     }
     return winner;
 }
 
-qint64 BatchComparePage::policyValue(const RowData& row) const
+qint64 BatchComparePage::ruleValue(const RowData& row, KeepCriterion criterion) const
 {
-    switch (currentPolicy()) {
-        case SelectionPolicy::LowestResolution:
-        case SelectionPolicy::HighestResolution:
+    switch (criterion) {
+        case KeepCriterion::Resolution:
             return static_cast<qint64>(row.width) * row.height;
-        case SelectionPolicy::SmallestFile:
-        case SelectionPolicy::LargestFile:
+        case KeepCriterion::FileSize:
             return row.fileSize;
-        case SelectionPolicy::OldestModified:
-        case SelectionPolicy::NewestModified:
+        case KeepCriterion::Modified:
             return row.modified.toMSecsSinceEpoch();
-        case SelectionPolicy::LowestBitDepth:
-        case SelectionPolicy::HighestBitDepth:
+        case KeepCriterion::BitDepth:
             return row.depth;
-        case SelectionPolicy::KeepAll:
-            return 0;
     }
     return 0;
 }
 
-BatchComparePage::SelectionPolicy BatchComparePage::currentPolicy() const
+bool BatchComparePage::betterByRules(const RowData& left, const RowData& right) const
 {
-    return static_cast<SelectionPolicy>(m_policy->currentData().toInt());
+    for (const KeepRule& rule : m_keepRules) {
+        const qint64 leftValue = ruleValue(left, rule.criterion);
+        const qint64 rightValue = ruleValue(right, rule.criterion);
+        if (leftValue == rightValue) {
+            continue;
+        }
+        return rule.direction == KeepDirection::Higher ? leftValue > rightValue
+                                                       : leftValue < rightValue;
+    }
+    return false;
+}
+
+void BatchComparePage::editKeepPolicy()
+{
+    KeepPolicyDialog dialog(m_keepRules, true, m_keepAll, this);
+    if (dialog.exec() != QDialog::Accepted) {
+        return;
+    }
+    m_keepRules = dialog.rules();
+    m_keepAll = dialog.keepAll();
+
+    QSettings settings;
+    settings.setValue(QStringLiteral("batchImage/keepRules"), encodeKeepRules(m_keepRules));
+    settings.setValue(QStringLiteral("batchImage/keepAll"), m_keepAll);
+
+    updatePolicyButton();
+    applyPolicyToChecks();
+    updateStatus();
+}
+
+void BatchComparePage::updatePolicyButton()
+{
+    m_policyButton->setToolTip(keepPrioritySummary(m_keepRules, m_keepAll));
+}
+
+void BatchComparePage::applyPolicyToChecks()
+{
+    for (int i = 0; i < m_tree->topLevelItemCount(); ++i) {
+        QTreeWidgetItem* group = m_tree->topLevelItem(i);
+        // Only duplicate groups have a choice to make. Unmatched images stay
+        // checked, otherwise applying a policy would uncheck all but one of them.
+        if (!group->data(CheckColumn, kGroupDuplicateRole).toBool()) {
+            continue;
+        }
+        const QVector<QTreeWidgetItem*> members = groupChildren(group);
+        if (members.isEmpty()) {
+            continue;
+        }
+        if (m_keepAll) {
+            setItemsChecked(members, true);
+            continue;
+        }
+
+        QVector<int> ids;
+        ids.reserve(members.size());
+        for (QTreeWidgetItem* item : members) {
+            ids.append(item->data(CheckColumn, kRecordIdRole).toInt());
+        }
+        const int winner = chooseWinnerId(ids);
+        for (QTreeWidgetItem* item : members) {
+            item->setCheckState(CheckColumn,
+                                item->data(CheckColumn, kRecordIdRole).toInt() == winner
+                                    ? Qt::Checked
+                                    : Qt::Unchecked);
+        }
+    }
+    updateStatus();
 }
 
 const BatchComparePage::RowData* BatchComparePage::recordForItem(
@@ -1158,7 +1192,7 @@ void BatchComparePage::showTreeContextMenu(const QPoint& position)
     QAction* invertAction = menu.addAction(tr("Invert"));
     menu.addSeparator();
     QAction* removeAction = menu.addAction(tr("Remove from list"));
-    QAction* deleteAction = menu.addAction(tr("Delete files"));
+    QAction* deleteAction = menu.addAction(tr("Move to Recycle Bin"));
     menu.addSeparator();
     QAction* copyAction = menu.addAction(tr("Copy"));
     QAction* propertyAction = menu.addAction(tr("Properties"));
@@ -1213,7 +1247,8 @@ void BatchComparePage::buildGroupMenu(QMenu& menu, const QTreeWidgetItem* group)
     menu.addSeparator();
     add(GroupAction::RemoveGroup, tr("Remove this group"));
     add(GroupAction::RemoveChecked, tr("Remove the checked images in the group"));
-    add(GroupAction::DeleteChecked, tr("Delete the checked files in the group"));
+    add(GroupAction::DeleteChecked,
+        tr("Move the checked files in the group to the Recycle Bin"));
     menu.addSeparator();
     add(GroupAction::Compare, tr("Compare the checked images"));
 
@@ -1227,7 +1262,8 @@ void BatchComparePage::buildGroupMenu(QMenu& menu, const QTreeWidgetItem* group)
     }
     for (QAction* action : menu.actions()) {
         if (action->data().toInt() == static_cast<int>(GroupAction::KeepOnlyBest)) {
-            action->setEnabled(hasMembers && currentPolicy() != SelectionPolicy::KeepAll);
+            action->setEnabled(hasMembers && !m_keepAll
+                               && group->data(CheckColumn, kGroupDuplicateRole).toBool());
         }
     }
 }
@@ -1323,6 +1359,9 @@ void BatchComparePage::setAllGroupsExpanded(bool expanded)
 
 void BatchComparePage::keepOnlyBest(QTreeWidgetItem* group)
 {
+    if (m_keepAll || !group->data(CheckColumn, kGroupDuplicateRole).toBool()) {
+        return;
+    }
     QVector<QTreeWidgetItem*> members = groupChildren(group);
     if (members.isEmpty()) {
         return;
@@ -1458,7 +1497,7 @@ void BatchComparePage::updateStatus()
                           .arg(m_records.size())
                           .arg(checkedItems().size())
                           .arg(sortText)
-                          .arg(m_policy->currentText()));
+                          .arg(keepPrioritySummary(m_keepRules, m_keepAll)));
 }
 
 void BatchComparePage::updateHeaderLabels()

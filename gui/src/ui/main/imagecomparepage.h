@@ -11,6 +11,7 @@ class QDoubleSpinBox;
 class QLabel;
 class QPushButton;
 class QResizeEvent;
+class ComparisonLogWidget;
 
 class ImageComparePage : public QWidget
 {
@@ -69,6 +70,7 @@ private:
     QLabel* m_resultSource;
     QDoubleSpinBox* m_threshold;
     QPushButton* m_compareButton;
+    ComparisonLogWidget* m_log;
 
     // Kept so a language switch can rewrite them.
     QPushButton* m_backButton;

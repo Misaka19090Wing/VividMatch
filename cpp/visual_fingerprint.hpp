@@ -140,6 +140,52 @@ inline Fingerprint fingerprintFromFile(const std::string& path) {
     return makeFingerprint(image);
 }
 
+// Detailed result of comparing two fingerprints block by block. The per-block
+// Hamming distances and which blocks were discarded are what a UI needs to
+// explain a score; compareFingerprints() only needs the final number.
+struct BlockComparison {
+    std::array<int, kBlockCount> distances{};
+    std::array<bool, kBlockCount> discarded{};
+    int keptBlocks = kBlockCount - kDiscardBlocks;
+    double score = 0.0;
+};
+
+// Compares two fingerprints by block. Blocks are ordered by Hamming distance;
+// the `discard` worst are marked discarded and the remaining ones averaged.
+// The score is a fraction of the 64 bits per kept block, so it is a claim about
+// block hashes, not about pixels: two unrelated but very flat images can share
+// several blocks. Callers pair it with a threshold (0.78 by default).
+inline BlockComparison compareFingerprintBlocks(
+    const Fingerprint& left,
+    const Fingerprint& right,
+    int discard = kDiscardBlocks) {
+    BlockComparison comparison;
+    std::array<int, kBlockCount> order{};
+    for (int i = 0; i < kBlockCount; ++i) {
+        comparison.distances[i] = popcount(left.blocks[i] ^ right.blocks[i]);
+        order[i] = i;
+    }
+
+    // Stable so ties discard the same block on every run, which keeps a log or
+    // a test reproducible.
+    std::stable_sort(order.begin(), order.end(), [&comparison](int first, int second) {
+        return comparison.distances[first] < comparison.distances[second];
+    });
+
+    const int requested = std::max(0, std::min(discard, kBlockCount - 1));
+    comparison.keptBlocks = kBlockCount - requested;
+    double totalDistance = 0.0;
+    for (int i = 0; i < comparison.keptBlocks; ++i) {
+        totalDistance += comparison.distances[order[i]];
+    }
+    for (int i = comparison.keptBlocks; i < kBlockCount; ++i) {
+        comparison.discarded[order[i]] = true;
+    }
+    comparison.score =
+        1.0 - totalDistance / (static_cast<double>(comparison.keptBlocks) * kHashBits);
+    return comparison;
+}
+
 // Similarity in [0, 1], where 1 means every kept block hashes identically.
 //
 // This is the 抗马赛克 rule: blocks are compared by Hamming
@@ -147,27 +193,11 @@ inline Fingerprint fingerprintFromFile(const std::string& path) {
 // Dropping the worst blocks is what lets a watermark, a black bar or a mosaic
 // patch sit over part of the picture without dragging the score down, while a
 // genuinely different picture still differs in most blocks.
-//
-// The score is a fraction of the 64 bits per kept block, so a score is a claim
-// about block hashes, not about pixels: two unrelated but very flat images can
-// share several blocks. Callers pair it with a threshold (0.78 by default).
 inline double compareFingerprints(
     const Fingerprint& left,
     const Fingerprint& right,
     int discard = kDiscardBlocks) {
-    std::array<double, kBlockCount> distances{};
-    for (int i = 0; i < kBlockCount; ++i) {
-        distances[i] = static_cast<double>(
-            popcount(left.blocks[i] ^ right.blocks[i]));
-    }
-
-    std::sort(distances.begin(), distances.end());
-    const int keep_count = std::max(1, kBlockCount - discard);
-    double total_distance = 0.0;
-    for (int i = 0; i < keep_count; ++i) {
-        total_distance += distances[i];
-    }
-    return 1.0 - total_distance / (static_cast<double>(keep_count) * kHashBits);
+    return compareFingerprintBlocks(left, right, discard).score;
 }
 
 }  // namespace vividmatch

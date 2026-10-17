@@ -189,9 +189,25 @@ int main(int argc, char** argv) {
                       << " matches=" << excerptComparison.matches.size()
                       << " chain=" << excerptComparison.monotonicRun
                       << " coverage=" << std::setprecision(3)
-                      << excerptComparison.coverage << '\n';
+                      << excerptComparison.coverage
+                      << " span=" << excerptComparison.spanCoverage << '\n';
             expect(!vividmatch::batchEdgeCounts(excerptComparison.verdict),
                    "a partial match is not treated as the same video");
+            expect(excerptComparison.spanCoverage < vividmatch::kVerdictCoverage,
+                   "a shared opening does not span the clip");
+            expect(!vividmatch::batchWantsAudio(excerptComparison),
+                   "a shared opening does not invite the audio layer");
+
+            // A sparse partial whose chain spans the clip is the re-timed-copy
+            // case; that one does get the audio layer.
+            vividmatch::VideoComparison drifted;
+            drifted.verdict = vividmatch::VideoVerdict::Partial;
+            drifted.spanCoverage = 0.95;
+            expect(vividmatch::batchWantsAudio(drifted),
+                   "a sparse match spanning the clip invites the audio layer");
+            drifted.spanCoverage = 0.20;
+            expect(!vividmatch::batchWantsAudio(drifted),
+                   "a short partial does not invite the audio layer");
         }
 
         // The prefilter must not be dropping real matches, and must be doing some
@@ -200,6 +216,23 @@ int main(int argc, char** argv) {
         expect(result.pairCandidates >= 3, "the prefilter keeps the matching pairs");
         expect(result.pairsCompared == result.pairCandidates,
                "every candidate pair was compared");
+
+        // The compact per-pair records must describe the same work the summary
+        // counts, and the prefilter rejections must be accounted for per clip.
+        expect(result.pairs.size() == static_cast<std::size_t>(result.pairsCompared),
+               "every compared pair has a pair record");
+        expect(result.signatureRejects.size() == paths.size(),
+               "the prefilter keeps one rejection count per clip");
+        bool pairsWellFormed = true;
+        for (const vividmatch::VideoBatchPair& pair : result.pairs) {
+            if (pair.left < 0 || pair.left >= pair.right
+                || pair.right >= static_cast<int>(paths.size())
+                || pair.signature < vividmatch::kDefaultSignatureThreshold
+                || pair.leftSamples <= 0 || pair.rightSamples <= 0) {
+                pairsWellFormed = false;
+            }
+        }
+        expect(pairsWellFormed, "pair records carry indices, signature and sample counts");
 
         // Ranking: prefer the highest resolution, which is what a user expects.
         const auto ranking = [](const std::vector<int>& members,

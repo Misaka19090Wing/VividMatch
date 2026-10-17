@@ -1,5 +1,6 @@
 #include "videocomparepage.h"
 
+#include "comparisonlog.h"
 #include "formatutils.h"
 #include "parallel_extract.hpp"
 
@@ -221,7 +222,17 @@ VideoCompareWorker::VideoCompareWorker(QString firstPath, QString secondPath,
 
 void VideoCompareWorker::run()
 {
+    auto log = [this](ComparisonLogLevel level, const QString& message) {
+        emit logMessage(static_cast<int>(level), message);
+    };
+
     try {
+        log(ComparisonLogLevel::Info,
+            VideoComparePage::tr("Starting video comparison (frame threshold %1, audio %2)")
+                .arg(m_frameThreshold, 0, 'f', 2)
+                .arg(m_includeAudio ? VideoComparePage::tr("on")
+                                    : VideoComparePage::tr("off")));
+
         // The video and audio stages overlap, and progress() is called from
         // those worker threads, so each update is routed back through the event
         // loop rather than touching widgets from here.
@@ -233,22 +244,136 @@ void VideoCompareWorker::run()
         vividmatch::fingerprintPair(
             m_firstPath.toStdString(), m_secondPath.toStdString(), left, right,
             m_includeAudio, std::string(), [this](const std::string& stage) {
-                const QString message = stage == "extracting audio fingerprints"
-                                            ? tr("Extracting the audio fingerprint (ffmpeg)...")
-                                            : tr("Extracting the video fingerprint...");
+                const QString message =
+                    stage == "extracting audio fingerprints"
+                        ? VideoComparePage::tr("Extracting the audio fingerprint (ffmpeg)...")
+                        : VideoComparePage::tr("Extracting the video fingerprint...");
                 QMetaObject::invokeMethod(
-                    this, [this, message]() { emit progress(message); },
+                    this,
+                    [this, message]() {
+                        emit progress(message);
+                        emit logMessage(static_cast<int>(ComparisonLogLevel::Info),
+                                        message);
+                    },
                     Qt::QueuedConnection);
             });
 
         const qint64 extractionMs = extractionTimer.elapsed();
+        log(ComparisonLogLevel::Info,
+            VideoComparePage::tr("Fingerprint extraction finished in %1")
+                .arg(formatutils::durationValue(extractionMs)));
 
-        emit progress(tr("Comparing..."));
-        vividmatch::VideoComparison comparison =
+        // Per-clip numbers. These are what explains a slow or surprising run:
+        // the sample count sets the comparison cost, and the audio fields say
+        // whether the soundtrack took part at all.
+        const auto logVideo = [&log](int index, const QString& path,
+                                     const vividmatch::VideoFingerprint& video) {
+            log(ComparisonLogLevel::Detail,
+                VideoComparePage::tr("Video %1: %2").arg(index).arg(path));
+            log(ComparisonLogLevel::Detail,
+                VideoComparePage::tr("%1x%2, %3 fps, %4 frames, %5 s, %6 sampled frames, "
+                                     "fingerprint in %7")
+                    .arg(video.width)
+                    .arg(video.height)
+                    .arg(video.fps, 0, 'f', 2)
+                    .arg(static_cast<qint64>(video.totalFrames))
+                    .arg(video.duration, 0, 'f', 2)
+                    .arg(static_cast<int>(video.frames.size()))
+                    .arg(formatutils::durationValue(
+                        static_cast<qint64>(video.elapsedMs))));
+        };
+        logVideo(1, m_firstPath, left);
+        logVideo(2, m_secondPath, right);
+        log(ComparisonLogLevel::Detail,
+            VideoComparePage::tr("Video and audio extraction run concurrently, so "
+                                 "per-clip times overlap."));
+
+        const auto logAudio = [&log](int index, const vividmatch::AudioFingerprint& audio) {
+            if (audio.available) {
+                log(ComparisonLogLevel::Detail,
+                    VideoComparePage::tr("Audio track %1: %2 s of features, decoded in %3")
+                        .arg(index)
+                        .arg(audio.duration, 0, 'f', 2)
+                        .arg(formatutils::durationValue(
+                            static_cast<qint64>(audio.elapsedMs))));
+            } else {
+                log(ComparisonLogLevel::Detail,
+                    VideoComparePage::tr("Audio track %1: not used (%2)")
+                        .arg(index)
+                        .arg(QString::fromStdString(audio.error)));
+            }
+        };
+        if (m_includeAudio) {
+            logAudio(1, left.audio);
+            logAudio(2, right.audio);
+        }
+
+        emit progress(VideoComparePage::tr("Comparing..."));
+        log(ComparisonLogLevel::Info,
+            VideoComparePage::tr("Comparing fingerprints..."));
+
+        const vividmatch::VideoComparison comparison =
             vividmatch::compareVideoFingerprints(left, right, m_frameThreshold);
+
+        log(ComparisonLogLevel::Detail,
+            VideoComparePage::tr("Frame pairs compared: %1 x %2 = %3")
+                .arg(comparison.leftFrames)
+                .arg(comparison.rightFrames)
+                .arg(static_cast<qint64>(comparison.leftFrames)
+                     * comparison.rightFrames));
+        log(ComparisonLogLevel::Detail,
+            VideoComparePage::tr("Matched frame pairs: %1; longest monotonic chain: %2")
+                .arg(static_cast<int>(comparison.matches.size()))
+                .arg(comparison.monotonicRun));
+        log(ComparisonLogLevel::Detail,
+            VideoComparePage::tr("Coverage: %1% of the shorter clip; chain completeness: %2%")
+                .arg(comparison.coverage * 100.0, 0, 'f', 1)
+                .arg(comparison.runRatio * 100.0, 0, 'f', 1));
+        log(ComparisonLogLevel::Detail,
+            VideoComparePage::tr("Frame similarity: mean %1%, best %2%, threshold %3")
+                .arg(comparison.meanScore * 100.0, 0, 'f', 1)
+                .arg(comparison.bestMatchScore * 100.0, 0, 'f', 1)
+                .arg(comparison.frameThreshold, 0, 'f', 2));
+        if (!comparison.alignment.empty()) {
+            log(ComparisonLogLevel::Detail,
+                VideoComparePage::tr(
+                    "Aligned samples: %1-%2 on video one, %3-%4 on video two")
+                    .arg(comparison.alignment.front().first)
+                    .arg(comparison.alignment.back().first)
+                    .arg(comparison.alignment.front().second)
+                    .arg(comparison.alignment.back().second));
+        }
+        log(ComparisonLogLevel::Detail, audioLayerNote(comparison.audio));
+
+        ComparisonLogLevel verdictLevel = ComparisonLogLevel::Warning;
+        switch (comparison.verdict) {
+            case vividmatch::VideoVerdict::Identical:
+                verdictLevel = ComparisonLogLevel::Success;
+                break;
+            case vividmatch::VideoVerdict::Reencoded:
+            case vividmatch::VideoVerdict::Partial:
+                verdictLevel = ComparisonLogLevel::Warning;
+                break;
+            case vividmatch::VideoVerdict::Montage:
+            case vividmatch::VideoVerdict::Different:
+                verdictLevel = ComparisonLogLevel::Error;
+                break;
+        }
+        log(verdictLevel, verdictLabel(comparison.verdict));
+        log(ComparisonLogLevel::Info,
+            VideoComparePage::tr("Comparison finished in %1 (fingerprints %2, comparison %3)")
+                .arg(formatutils::durationValue(
+                    extractionMs + static_cast<qint64>(comparison.elapsedMs)))
+                .arg(formatutils::durationValue(extractionMs))
+                .arg(formatutils::durationValue(
+                    static_cast<qint64>(comparison.elapsedMs))));
+
         emit finished(comparison, extractionMs);
     } catch (const std::exception& error) {
-        emit failed(QString::fromUtf8(error.what()));
+        const QString message = QString::fromUtf8(error.what());
+        log(ComparisonLogLevel::Error,
+            VideoComparePage::tr("Video comparison failed: %1").arg(message));
+        emit failed(message);
     }
 }
 
@@ -267,6 +392,7 @@ VideoComparePage::VideoComparePage(QWidget* parent)
     , m_compareButton(nullptr)
     , m_threshold(nullptr)
     , m_audioCheck(nullptr)
+    , m_log(new ComparisonLogWidget(this))
     , m_worker(nullptr)
     , m_busy(false)
 {
@@ -394,7 +520,7 @@ VideoComparePage::VideoComparePage(QWidget* parent)
     m_progress->setRange(0, 1);
     m_progress->setValue(0);
     root->addWidget(m_progress);
-    root->addStretch(1);
+    root->addWidget(m_log, 1);
 
     retranslate();
 }
@@ -484,6 +610,7 @@ void VideoComparePage::setVideoPath(int slot, const QString& path)
     refreshPreview(slot);
     m_compareButton->setEnabled(!m_firstPath.isEmpty() && !m_secondPath.isEmpty()
                                 && !m_busy);
+    m_log->detail(tr("Video %1 selected: %2").arg(slot + 1).arg(path));
     resetResult();
 }
 
@@ -544,6 +671,7 @@ void VideoComparePage::startCompare()
     m_metrics->clear();
     m_progress->setRange(0, 0);
     m_progress->setFormat(tr("Comparing..."));
+    m_log->clear();
 
     m_worker = new VideoCompareWorker(m_firstPath, m_secondPath, m_threshold->value(),
                                       m_audioCheck->isChecked());
@@ -552,6 +680,8 @@ void VideoComparePage::startCompare()
     connect(m_thread, &QThread::started, m_worker, &VideoCompareWorker::run);
     connect(m_worker, &VideoCompareWorker::progress, this,
             &VideoComparePage::onWorkerProgress, Qt::QueuedConnection);
+    connect(m_worker, &VideoCompareWorker::logMessage, this,
+            &VideoComparePage::onWorkerLog, Qt::QueuedConnection);
     connect(m_worker, &VideoCompareWorker::finished, this,
             &VideoComparePage::onCompareFinished, Qt::QueuedConnection);
     connect(m_worker, &VideoCompareWorker::failed, this, &VideoComparePage::onCompareFailed,
@@ -568,6 +698,11 @@ void VideoComparePage::startCompare()
 void VideoComparePage::onWorkerProgress(const QString& message)
 {
     m_progress->setFormat(message);
+}
+
+void VideoComparePage::onWorkerLog(int level, const QString& message)
+{
+    m_log->append(static_cast<ComparisonLogLevel>(level), message);
 }
 
 void VideoComparePage::onCompareFinished(vividmatch::VideoComparison comparison,

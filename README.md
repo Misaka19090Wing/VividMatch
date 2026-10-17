@@ -90,12 +90,18 @@ The design follows where the time actually goes, measured on real clips:
   `kDefaultSignatureThreshold` get the full comparison. Measured separation:
   same content 0.97-1.00, different content 0.63-0.70, so the threshold sits in
   the gap and drops nothing real.
-- **Audio is extracted lazily**, only for clips that take part in a visually
-  matching pair, because it costs a separate ffmpeg process per clip.
+- **Audio is extracted lazily**: by default only for clips in a visually matching
+  pair, because it costs a separate ffmpeg process per clip. A `partial` whose
+  chain is sparse but spans the whole clip also gets audio - that is the
+  frame-interpolated or re-timed transcode case, where the soundtrack is the
+  reliable evidence. A partial that only covers the opening is left alone, so a
+  shared opening is not rescued by its audio.
 
-A `partial` verdict deliberately does not merge a group: a shared opening or a
-clip cut from a longer video is not the same video. `identical` and `reencoded`
-both merge, since the latter is the same picture with the soundtrack swapped.
+A `partial` verdict does not merge a group by default: a shared opening or a clip
+cut from a longer video is not the same video. It becomes `identical` only when
+the visual chain spans the clip and the soundtrack agrees. `identical` and
+`reencoded` both merge, since the latter is the same picture with the soundtrack
+swapped.
 
 The verdicts, restricted to the cases this implementation can tell apart:
 
@@ -156,6 +162,44 @@ comparison mode from a function-selection page. There are four:
 | Batch video comparison | add a folder of clips, group the ones that are the same video, and pick one to keep per group |
 
 All four are also listed in the **File** menu.
+
+### Comparison log
+
+Every mode has a collapsible **Comparison log** panel at the bottom that reports the
+work while it runs:
+
+- Image comparison: decode and hashing times, the normalised canvas, the 16 block
+  hashes and Hamming distances, the four discarded blocks, and the final similarity
+  and verdict.
+- Video comparison: resolution, frame rate, frame count, sampled frames and
+  extraction time for each clip; whether the audio layer took part and why; matched
+  frame pairs, the longest monotonic chain, coverage, chain completeness, mean and
+  best frame similarity, the aligned span, audio similarity, and the fused verdict.
+- Batch images: per-image decode and hash times plus every pair's similarity score,
+  followed by each duplicate group with its members and best score.
+- Batch videos: per-clip resolution, duration, sampled frames and signature-prefilter
+  rejections; every candidate pair that passed the prefilter with its verdict,
+  coverage, chain completeness and audio result; and every group with its members
+  and the clip chosen to keep.
+
+Each line carries a millisecond timestamp and a level (`INFO` / `OK` / `WARN` /
+`ERROR` / `DETAIL`). The panel offers a **Details** filter (hiding `DETAIL` lines from
+the view while copy and save still contain the full log), auto-scroll, copy, save to
+a text file, clear, and collapse to give the table above more room. Logs are not
+persisted automatically; use **Save...** when a copy is needed.
+
+### Keep priorities and the unmatched group
+
+Batch image/video keep decisions use an ordered priority list: resolution, file
+size, modified date (and bit depth for images). **Edit priorities...** opens a
+dialog where **Move Up/Down** changes the order and **Direction** picks highest,
+largest, newest, etc.; **Save** stores the list in `QSettings` so it survives a
+restart. **Keep every file checked** is the old Keep everything mode.
+
+Images/videos that matched nothing are collected into one **No duplicates**
+group. They are independent files, so the keep policy leaves all of them checked.
+A video that only partly overlaps another (a possible montage) still keeps its
+own heading.
 
 ### Language
 

@@ -14,8 +14,8 @@
 #include <QWidget>
 
 #include "video_batch.hpp"
+#include "keeppolicy.h"
 
-class QComboBox;
 class QLabel;
 class QLineEdit;
 class QProgressBar;
@@ -25,23 +25,13 @@ class QStyledItemDelegate;
 class QThread;
 class QTreeWidget;
 class QTreeWidgetItem;
+class ComparisonLogWidget;
 
-// How the winner of a duplicate group is chosen. Declared outside the page so
-// the worker can carry it by value: reading it off the page from the worker
-// thread would be a race against the combo box.
-enum class KeepPolicy {
-    HighestResolution = 0,
-    LowestResolution,
-    LargestFile,
-    SmallestFile,
-    NewestModified,
-    OldestModified,
-    KeepAll,
-};
-
-// Ranks a group under `policy`, returning the index to keep or -1 for "keep
-// everything". Free of page state so it is safe to call from a worker thread.
-int rankVideoGroup(KeepPolicy policy, const std::vector<int>& members,
+// Ranks a group under the ordered rules, returning the index to keep or -1 for
+// "keep everything". Free of page state so it is safe to call from a worker
+// thread.
+int rankVideoGroup(const QVector<KeepRule>& rules, bool keepAll,
+                   const std::vector<int>& members,
                    const std::vector<vividmatch::VideoBatchItem>& items);
 
 // One row of the batch result, flattened for the list. `row` is the index into
@@ -91,21 +81,25 @@ class VideoBatchWorker : public QObject
     Q_OBJECT
 
 public:
-    // `paths` is a snapshot of the list and `policy` is taken by value: the
-    // worker runs on its own thread and must not read page state.
-    VideoBatchWorker(QStringList paths, KeepPolicy policy);
+    // `paths` and the rules are snapshots: the worker runs on its own thread and
+    // must not read page state.
+    VideoBatchWorker(QStringList paths, QVector<KeepRule> rules, bool keepAll);
 
 public slots:
     void run();
 
 signals:
     void progress(int done, int total, const QString& stage);
+    // Detailed log line; the level is a ComparisonLogLevel value. Emitted from
+    // the worker thread and delivered through the page's event queue.
+    void logMessage(int level, const QString& message);
     void finished(VideoBatchOutcome outcome);
     void failed(const QString& message);
 
 private:
     QStringList m_paths;
-    KeepPolicy m_policy;
+    QVector<KeepRule> m_rules;
+    bool m_keepAll = false;
 };
 
 class VideoBatchPage : public QWidget
@@ -141,6 +135,7 @@ private slots:
     void selectAllChecked();
     void startCompare();
     void onWorkerProgress(int done, int total, const QString& stage);
+    void onWorkerLog(int level, const QString& message);
     void onCompareFinished(VideoBatchOutcome outcome);
     void onCompareFailed(const QString& message);
     void onThreadFinished();
@@ -234,10 +229,12 @@ private:
     int recordIdForPath(const QString& path) const;
     void updateStatus();
     void setBusy(bool busy);
-    KeepPolicy currentPolicy() const;
+    void editKeepPolicy();
+    void updatePolicyButton();
+    qint64 ruleValue(const RowData& row, KeepCriterion criterion) const;
 
     QTreeWidget* m_tree;
-    QComboBox* m_policy;
+    QPushButton* m_policyButton;
     QLineEdit* m_search;
     QSpinBox* m_capturePosition;
     QProgressBar* m_progress;
@@ -248,6 +245,7 @@ private:
     QPushButton* m_removeButton;
     QPushButton* m_deleteButton;
     QLabel* m_status;
+    ComparisonLogWidget* m_log;
 
     VideoBatchItemDelegate* m_delegate;
     // Clips whose preview has been requested but not delivered yet, so a rebuild
@@ -265,6 +263,8 @@ private:
     QPushButton* m_regrabButton;
 
     QHash<int, RowData> m_records;
+    QVector<KeepRule> m_keepRules;
+    bool m_keepAll = false;
     QStringList m_listedPaths;  // clips already shown in the tree
     int m_nextRecordId;
     int m_lastClipCount;

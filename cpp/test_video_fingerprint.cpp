@@ -151,6 +151,27 @@ vividmatch::AudioFingerprint toneAudio(double frequency, int seconds) {
     return audio;
 }
 
+// Two tones in one track: the first `openingSeconds` match a shared opening,
+// the rest deliberately do not.
+vividmatch::AudioFingerprint mixedToneAudio(double openingFrequency, double restFrequency,
+                                            int openingSeconds, int totalSeconds) {
+    vividmatch::AudioFingerprint audio;
+    audio.available = true;
+    audio.sampleRate = vividmatch::kAudioSampleRate;
+    audio.duration = totalSeconds;
+    for (int second = 0; second < totalSeconds; ++second) {
+        const double frequency = second < openingSeconds ? openingFrequency : restFrequency;
+        std::vector<double> samples(static_cast<std::size_t>(vividmatch::kAudioSampleRate));
+        for (std::size_t i = 0; i < samples.size(); ++i) {
+            samples[i] = std::sin(2.0 * 3.14159265358979323846 * frequency
+                                  * static_cast<double>(i) / vividmatch::kAudioSampleRate);
+        }
+        audio.seconds.push_back(vividmatch::detail::analyseSecond(
+            samples, 0, samples.size(), vividmatch::kAudioSampleRate, second));
+    }
+    return audio;
+}
+
 void dumpMatrix(const std::string& label, const VideoComparison& comparison) {
     std::cout << "   " << label << " score matrix (rows=left, cols=right):\n";
     std::cout.setf(std::ios::fixed);
@@ -452,6 +473,48 @@ int main(int argc, char** argv) {
                                    "a replaced soundtrack is detected");
                 failures += expect(comparison.verdict == VideoVerdict::Reencoded,
                                    "same picture with a different soundtrack is reencoded");
+            }
+
+            // A shared opening whose audio also matches must not be rescued:
+            // the alignment only covers the opening, not the clip.
+            {
+                VideoFingerprint whole = fingerprintOf({1, 2, 3, 4, 5, 6}, 320, 240);
+                whole.audio = toneAudio(440.0, 6);
+                VideoFingerprint excerpt =
+                    fingerprintOf({1, 2, 3, 21, 22, 23}, 320, 240);
+                excerpt.audio = mixedToneAudio(440.0, 2000.0, 3, 6);
+
+                const VideoComparison comparison =
+                    vividmatch::compareVideoFingerprints(whole, excerpt);
+                report("audio-shared-opening", comparison);
+                failures += expect(comparison.audio.available
+                                       && comparison.audio.sameSoundtrack,
+                                   "the shared opening's audio matches");
+                failures += expect(comparison.spanCoverage < vividmatch::kVerdictCoverage,
+                                   "a shared opening does not span the clip");
+                failures += expect(comparison.verdict == VideoVerdict::Partial,
+                                   "a shared opening is not rescued by matching audio");
+            }
+
+            // Sparse picture matches spread across the whole clip, with the same
+            // soundtrack: the re-timed-copy case, which audio may rescue.
+            {
+                VideoFingerprint first =
+                    fingerprintOf({1, 2, 3, 4, 5, 6, 7, 8, 9, 10}, 320, 240);
+                first.audio = toneAudio(440.0, 10);
+                VideoFingerprint second =
+                    fingerprintOf({1, 90, 3, 91, 5, 92, 7, 93, 9, 94}, 320, 240);
+                second.audio = toneAudio(440.0, 10);
+
+                const VideoComparison comparison =
+                    vividmatch::compareVideoFingerprints(first, second);
+                report("audio-sparse-span", comparison);
+                failures += expect(comparison.coverage < vividmatch::kVerdictCoverage,
+                                   "the sparse visual match alone is not identical");
+                failures += expect(comparison.spanCoverage >= vividmatch::kVerdictCoverage,
+                                   "sparse matches still span the clip");
+                failures += expect(comparison.verdict == VideoVerdict::Identical,
+                                   "matching audio rescues a sparse match across the clip");
             }
 
             // No audio at all must not change the visual verdict.

@@ -28,6 +28,9 @@ public slots:
 
 signals:
     void progressChanged(int done, int total);
+    // Detailed log line; the level is a ComparisonLogLevel value. The worker
+    // never touches a widget, so these are delivered through the page's queue.
+    void logMessage(int level, const QString& message);
     // elapsedMs is how long the whole batch took, measured inside the worker so
     // it covers decoding, fingerprinting and the pairwise comparison.
     void finished(QVector<BatchCluster> clusters, qint64 elapsedMs);

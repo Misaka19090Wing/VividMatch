@@ -1,12 +1,13 @@
 #include "videobatchpage.h"
 
+#include "comparisonlog.h"
 #include "formatutils.h"
+#include "keeppolicydialog.h"
 
 #include <QAction>
 #include <QApplication>
 #include <QBrush>
 #include <QClipboard>
-#include <QComboBox>
 #include <QDateTime>
 #include <QDesktopServices>
 #include <QDirIterator>
@@ -29,6 +30,7 @@
 #include <QProgressBar>
 #include <QPushButton>
 #include <QShortcut>
+#include <QSettings>
 #include <QSpinBox>
 #include <QStyledItemDelegate>
 #include <QStyleOptionButton>
@@ -48,11 +50,16 @@
 namespace {
 
 constexpr int kRecordIdRole = Qt::UserRole + 1;
+// Per-pair detail is useful but can grow with the square of the batch size. The
+// comparison still covers every pair; this only bounds what the panel prints.
+// shortcut: per-pair lines stop at 5000, raise it if a batch needs every pair visible.
+constexpr int kMaxPairLogLines = 5000;
 // Marks the group holding clips that are not compared yet, so a rebuild can
 // replace it without touching the result groups.
 constexpr int kPendingMarker = -1;
 constexpr int kGroupBaseRole = Qt::UserRole + 2;
 constexpr int kThumbnailImageRole = Qt::UserRole + 3;
+constexpr int kDuplicateGroupRole = Qt::UserRole + 4;
 
 // Padding kept between the preview column edges and the picture itself.
 constexpr int kThumbnailPadding = 6;
@@ -362,6 +369,26 @@ QString groupLabel(const VideoBatchGroupInfo& group)
     return VideoBatchPage::tr("No duplicates");
 }
 
+// Verdict name for the log. The core's canonical names ("identical",
+// "reencoded", ...) are useful in the CLI, but the GUI log is read by the same
+// people as the rest of the interface, so it uses the translated wording.
+QString verdictText(vividmatch::VideoVerdict verdict)
+{
+    switch (verdict) {
+        case vividmatch::VideoVerdict::Identical:
+            return VideoBatchPage::tr("identical");
+        case vividmatch::VideoVerdict::Reencoded:
+            return VideoBatchPage::tr("reencoded");
+        case vividmatch::VideoVerdict::Montage:
+            return VideoBatchPage::tr("montage");
+        case vividmatch::VideoVerdict::Partial:
+            return VideoBatchPage::tr("partial");
+        case vividmatch::VideoVerdict::Different:
+            return VideoBatchPage::tr("different");
+    }
+    return VideoBatchPage::tr("unknown");
+}
+
 // One preview grab, run on the global thread pool. Pooling keeps the UI
 // responsive while a folder of clips is being read, and a plain runnable avoids
 // sharing any state beyond the path it was handed.
@@ -400,52 +427,61 @@ private:
 
 // --- ranking ---------------------------------------------------------------
 
-int rankVideoGroup(KeepPolicy policy, const std::vector<int>& members,
+namespace {
+
+qint64 videoRuleValue(const vividmatch::VideoBatchItem& item, KeepCriterion criterion)
+{
+    switch (criterion) {
+        case KeepCriterion::Resolution:
+            return static_cast<qint64>(item.fingerprint.width) * item.fingerprint.height;
+        case KeepCriterion::FileSize: {
+            std::error_code code;
+            const std::uintmax_t bytes =
+                std::filesystem::file_size(std::filesystem::u8path(item.path), code);
+            return code ? 0 : static_cast<qint64>(bytes);
+        }
+        case KeepCriterion::Modified:
+            return QFileInfo(QString::fromStdString(item.path))
+                .lastModified()
+                .toMSecsSinceEpoch();
+        case KeepCriterion::BitDepth:
+            return 0;
+    }
+    return 0;
+}
+
+bool betterVideoItem(const vividmatch::VideoBatchItem& left,
+                     const vividmatch::VideoBatchItem& right,
+                     const QVector<KeepRule>& rules)
+{
+    for (const KeepRule& rule : rules) {
+        const qint64 leftValue = videoRuleValue(left, rule.criterion);
+        const qint64 rightValue = videoRuleValue(right, rule.criterion);
+        if (leftValue == rightValue) {
+            continue;
+        }
+        return rule.direction == KeepDirection::Higher ? leftValue > rightValue
+                                                       : leftValue < rightValue;
+    }
+    return false;
+}
+
+} // namespace
+
+int rankVideoGroup(const QVector<KeepRule>& rules, bool keepAll,
+                   const std::vector<int>& members,
                    const std::vector<vividmatch::VideoBatchItem>& items)
 {
-    if (policy == KeepPolicy::KeepAll || members.empty()) {
+    if (keepAll || members.empty()) {
         return -1;
     }
 
-    // Half the policies keep the largest value and half the smallest.
-    const bool keepLargest = policy == KeepPolicy::HighestResolution
-                             || policy == KeepPolicy::LargestFile
-                             || policy == KeepPolicy::NewestModified;
-
     int best = members.front();
-    double bestValue = 0.0;
-    bool first = true;
     for (const int member : members) {
-        const vividmatch::VideoBatchItem& item = items[static_cast<std::size_t>(member)];
-        double value = 0.0;
-        switch (policy) {
-            case KeepPolicy::HighestResolution:
-            case KeepPolicy::LowestResolution:
-                value = static_cast<double>(item.fingerprint.width) * item.fingerprint.height;
-                break;
-            case KeepPolicy::LargestFile:
-            case KeepPolicy::SmallestFile: {
-                std::error_code code;
-                value = static_cast<double>(
-                    std::filesystem::file_size(std::filesystem::u8path(item.path), code));
-                if (code) {
-                    value = 0.0;
-                }
-                break;
-            }
-            case KeepPolicy::NewestModified:
-            case KeepPolicy::OldestModified: {
-                const QFileInfo file(QString::fromStdString(item.path));
-                value = static_cast<double>(file.lastModified().toMSecsSinceEpoch());
-                break;
-            }
-            case KeepPolicy::KeepAll:
-                return -1;
-        }
-        if (first || (keepLargest ? value > bestValue : value < bestValue)) {
+        if (member != best
+            && betterVideoItem(items[static_cast<std::size_t>(member)],
+                               items[static_cast<std::size_t>(best)], rules)) {
             best = member;
-            bestValue = value;
-            first = false;
         }
     }
     return best;
@@ -453,14 +489,19 @@ int rankVideoGroup(KeepPolicy policy, const std::vector<int>& members,
 
 // --- worker ----------------------------------------------------------------
 
-VideoBatchWorker::VideoBatchWorker(QStringList paths, KeepPolicy policy)
+VideoBatchWorker::VideoBatchWorker(QStringList paths, QVector<KeepRule> rules, bool keepAll)
     : m_paths(std::move(paths))
-    , m_policy(policy)
+    , m_rules(std::move(rules))
+    , m_keepAll(keepAll)
 {
 }
 
 void VideoBatchWorker::run()
 {
+    auto log = [this](ComparisonLogLevel level, const QString& message) {
+        emit logMessage(static_cast<int>(level), message);
+    };
+
     try {
         std::vector<std::string> paths;
         paths.reserve(static_cast<std::size_t>(m_paths.size()));
@@ -468,23 +509,34 @@ void VideoBatchWorker::run()
             paths.push_back(path.toStdString());
         }
 
-        // The policy is carried by value, so ranking a group here touches no
+        log(ComparisonLogLevel::Info,
+            VideoBatchPage::tr("Starting batch video comparison: %1 clips, frame "
+                               "threshold %2, signature threshold %3, %4 worker threads")
+                .arg(static_cast<int>(m_paths.size()))
+                .arg(vividmatch::kDefaultFrameThreshold, 0, 'f', 2)
+                .arg(vividmatch::kDefaultSignatureThreshold, 0, 'f', 2)
+                .arg(vividmatch::kDefaultBatchWorkers));
+
+        // The rules are carried by value, so ranking a group here touches no
         // page state from this thread.
-        const KeepPolicy policy = m_policy;
+        const QVector<KeepRule> rules = m_rules;
+        const bool keepAll = m_keepAll;
         const vividmatch::VideoRanking ranking =
-            [policy](const std::vector<int>& members,
-                     const std::vector<vividmatch::VideoBatchItem>& items) {
-                return rankVideoGroup(policy, members, items);
+            [rules, keepAll](const std::vector<int>& members,
+                             const std::vector<vividmatch::VideoBatchItem>& items) {
+                return rankVideoGroup(rules, keepAll, members, items);
             };
 
         const vividmatch::VideoBatchResult result = vividmatch::compareVideoBatch(
             paths, vividmatch::kDefaultFrameThreshold, vividmatch::kDefaultSignatureThreshold,
             vividmatch::kDefaultBatchWorkers, ranking,
-            [this](int done, int total, const std::string& stage) {
-                const QString label = stage == "extracting" ? tr("Reading clips")
-                                      : stage == "audio"    ? tr("Comparing audio")
-                                                            : tr("Comparing");
+            [this, &log](int done, int total, const std::string& stage) {
+                const QString label = stage == "extracting" ? VideoBatchPage::tr("Reading clips")
+                                      : stage == "audio"    ? VideoBatchPage::tr("Comparing audio")
+                                                            : VideoBatchPage::tr("Comparing");
                 emit progress(done, total, label);
+                log(ComparisonLogLevel::Detail,
+                    VideoBatchPage::tr("%1: %2/%3").arg(label).arg(done).arg(total));
             });
 
         VideoBatchOutcome outcome;
@@ -496,13 +548,157 @@ void VideoBatchWorker::run()
         const int n = outcome.clipCount;
         outcome.pairsPossible = n > 1 ? n * (n - 1) / 2 : 0;
 
-        for (const vividmatch::VideoBatchItem& item : result.items) {
+        log(ComparisonLogLevel::Info,
+            VideoBatchPage::tr("Signature prefilter: %1 of %2 possible pairs passed "
+                               "(threshold %3)")
+                .arg(result.pairCandidates)
+                .arg(outcome.pairsPossible)
+                .arg(vividmatch::kDefaultSignatureThreshold, 0, 'f', 2));
+        log(ComparisonLogLevel::Info,
+            VideoBatchPage::tr("Fingerprint extraction finished in %1; comparison took %2")
+                .arg(formatutils::durationValue(static_cast<qint64>(result.extractMs)))
+                .arg(formatutils::durationValue(static_cast<qint64>(result.compareMs))));
+        log(ComparisonLogLevel::Detail,
+            VideoBatchPage::tr("Extraction runs on %1 worker threads, so per-clip times "
+                               "overlap.")
+                .arg(vividmatch::kDefaultBatchWorkers));
+
+        // Per clip: what was read, how long it took, and how many pairs the
+        // signature prefilter discarded because of it.
+        for (int index = 0; index < static_cast<int>(result.items.size()); ++index) {
+            const vividmatch::VideoBatchItem& item = result.items[static_cast<std::size_t>(index)];
+            const QString name = QFileInfo(QString::fromStdString(item.path)).fileName();
             if (!item.ok) {
-                outcome.failures << QStringLiteral("%1（%2）")
-                                        .arg(QString::fromStdString(item.path))
-                                        .arg(QString::fromStdString(item.error));
+                const QString message =
+                    VideoBatchPage::tr("Clip %1 could not be read: %2 (%3)")
+                        .arg(index + 1)
+                        .arg(name)
+                        .arg(QString::fromStdString(item.error));
+                log(ComparisonLogLevel::Error, message);
+                outcome.failures << message;
+                continue;
+            }
+
+            log(ComparisonLogLevel::Detail,
+                VideoBatchPage::tr("Clip %1/%2: %3 - %4x%5, %6 fps, %7 s, %8 sampled "
+                                   "frames, fingerprint %9, %10 signature rejections")
+                    .arg(index + 1)
+                    .arg(static_cast<int>(result.items.size()))
+                    .arg(name)
+                    .arg(item.fingerprint.width)
+                    .arg(item.fingerprint.height)
+                    .arg(item.fingerprint.fps, 0, 'f', 2)
+                    .arg(item.fingerprint.duration, 0, 'f', 2)
+                    .arg(static_cast<int>(item.fingerprint.frames.size()))
+                    .arg(formatutils::durationValue(
+                        static_cast<qint64>(item.fingerprint.elapsedMs)))
+                    .arg(result.signatureRejects[static_cast<std::size_t>(index)]));
+        }
+
+        // Per candidate pair: the compact numbers the batch layer copied out.
+        int loggedPairs = 0;
+        for (const vividmatch::VideoBatchPair& pair : result.pairs) {
+            if (loggedPairs >= kMaxPairLogLines) {
+                break;
+            }
+            const QString leftName =
+                QFileInfo(QString::fromStdString(
+                              result.items[static_cast<std::size_t>(pair.left)].path))
+                    .fileName();
+            const QString rightName =
+                QFileInfo(QString::fromStdString(
+                              result.items[static_cast<std::size_t>(pair.right)].path))
+                    .fileName();
+            log(pair.counts ? ComparisonLogLevel::Success : ComparisonLogLevel::Detail,
+                VideoBatchPage::tr("Pair %1-%2 (%3 vs %4): signature %5%, verdict %6, "
+                                   "coverage %7%, span %8%, chain %9%, mean %10%")
+                    .arg(pair.left + 1)
+                    .arg(pair.right + 1)
+                    .arg(leftName)
+                    .arg(rightName)
+                    .arg(pair.signature * 100.0, 0, 'f', 1)
+                    .arg(verdictText(pair.verdict))
+                    .arg(pair.coverage * 100.0, 0, 'f', 1)
+                    .arg(pair.spanCoverage * 100.0, 0, 'f', 1)
+                    .arg(pair.runRatio * 100.0, 0, 'f', 1)
+                    .arg(pair.meanScore * 100.0, 0, 'f', 1));
+
+            if (pair.audio.available) {
+                log(ComparisonLogLevel::Detail,
+                    VideoBatchPage::tr("  audio: %1 aligned seconds, similarity %2% "
+                                       "(threshold %3%) -> %4")
+                        .arg(pair.audio.comparedSeconds)
+                        .arg(pair.audio.meanSimilarity * 100.0, 0, 'f', 1)
+                        .arg(pair.audio.threshold * 100.0, 0, 'f', 1)
+                        .arg(pair.audio.sameSoundtrack
+                                 ? VideoBatchPage::tr("the same soundtrack")
+                                 : VideoBatchPage::tr("different soundtracks")));
+            } else if (!pair.audio.error.empty()) {
+                log(ComparisonLogLevel::Detail,
+                    VideoBatchPage::tr("  audio: not used (%1)")
+                        .arg(QString::fromStdString(pair.audio.error)));
+            }
+
+            ++loggedPairs;
+            if (loggedPairs == kMaxPairLogLines) {
+                log(ComparisonLogLevel::Warning,
+                    VideoBatchPage::tr("Per-pair detail stopped after %1 pairs; the "
+                                       "remaining pairs are still compared.")
+                        .arg(kMaxPairLogLines));
             }
         }
+
+        int duplicateGroups = 0;
+        for (int index = 0; index < static_cast<int>(result.groups.size()); ++index) {
+            const vividmatch::VideoBatchGroup& group =
+                result.groups[static_cast<std::size_t>(index)];
+            QStringList names;
+            for (const int member : group.members) {
+                names << QFileInfo(QString::fromStdString(
+                                       result.items[static_cast<std::size_t>(member)].path))
+                             .fileName();
+            }
+            if (group.duplicate) {
+                ++duplicateGroups;
+            }
+
+            QString detail =
+                VideoBatchPage::tr("%1 clips, similarity %2%")
+                    .arg(static_cast<int>(group.members.size()))
+                    .arg(group.similarity * 100.0, 0, 'f', 1);
+            if (group.audioDiffers) {
+                detail += VideoBatchPage::tr(", different audio");
+            }
+            if (group.preferred >= 0) {
+                detail += VideoBatchPage::tr(", keep %1")
+                              .arg(QFileInfo(QString::fromStdString(
+                                                 result.items[static_cast<std::size_t>(
+                                                     group.preferred)]
+                                                     .path))
+                                       .fileName());
+            }
+
+            const QString groupName =
+                group.duplicate
+                    ? VideoBatchPage::tr("Duplicate group %1").arg(index + 1)
+                    : group.montageOnly
+                          ? VideoBatchPage::tr("Possibly spliced clip %1").arg(index + 1)
+                          : VideoBatchPage::tr("Single clip %1").arg(index + 1);
+            log(group.duplicate ? ComparisonLogLevel::Success
+                                : ComparisonLogLevel::Detail,
+                VideoBatchPage::tr("%1: %2 - %3")
+                    .arg(groupName)
+                    .arg(names.join(QStringLiteral(", ")))
+                    .arg(detail));
+        }
+
+        log(ComparisonLogLevel::Info,
+            VideoBatchPage::tr("Batch video comparison finished: %1 clips, %2 duplicate "
+                               "groups, %3 pairs compared in %4")
+                .arg(outcome.clipCount)
+                .arg(duplicateGroups)
+                .arg(outcome.pairsCompared)
+                .arg(formatutils::durationValue(outcome.extractMs + outcome.compareMs)));
 
         for (const vividmatch::VideoBatchGroup& group : result.groups) {
             VideoBatchGroupInfo info;
@@ -544,7 +740,10 @@ void VideoBatchWorker::run()
 
         emit finished(outcome);
     } catch (const std::exception& error) {
-        emit failed(QString::fromUtf8(error.what()));
+        const QString message = QString::fromUtf8(error.what());
+        log(ComparisonLogLevel::Error,
+            VideoBatchPage::tr("Batch video comparison failed: %1").arg(message));
+        emit failed(message);
     }
 }
 
@@ -553,7 +752,7 @@ void VideoBatchWorker::run()
 VideoBatchPage::VideoBatchPage(QWidget* parent)
     : QWidget(parent)
     , m_tree(new QTreeWidget(this))
-    , m_policy(new QComboBox(this))
+    , m_policyButton(nullptr)
     , m_search(new QLineEdit(this))
     , m_progress(new QProgressBar(this))
     , m_compareButton(nullptr)
@@ -563,6 +762,7 @@ VideoBatchPage::VideoBatchPage(QWidget* parent)
     , m_removeButton(nullptr)
     , m_deleteButton(nullptr)
     , m_status(new QLabel(this))
+    , m_log(new ComparisonLogWidget(this))
     , m_delegate(new VideoBatchItemDelegate(this))
     , m_backButton(nullptr)
     , m_titleLabel(nullptr)
@@ -642,20 +842,19 @@ VideoBatchPage::VideoBatchPage(QWidget* parent)
     controls->addSpacing(12);
     m_policyLabel = new QLabel(this);
     controls->addWidget(m_policyLabel);
-    // Items are labelled in retranslate(); the data identifies each policy.
-    m_policy->addItem(QString(), static_cast<int>(KeepPolicy::HighestResolution));
-    m_policy->addItem(QString(), static_cast<int>(KeepPolicy::LowestResolution));
-    m_policy->addItem(QString(), static_cast<int>(KeepPolicy::LargestFile));
-    m_policy->addItem(QString(), static_cast<int>(KeepPolicy::SmallestFile));
-    m_policy->addItem(QString(), static_cast<int>(KeepPolicy::NewestModified));
-    m_policy->addItem(QString(), static_cast<int>(KeepPolicy::OldestModified));
-    m_policy->addItem(QString(), static_cast<int>(KeepPolicy::KeepAll));
-    m_policy->setCurrentIndex(0);
-    controls->addWidget(m_policy);
+    m_policyButton = new QPushButton(this);
+    m_policyButton->setObjectName(QStringLiteral("secondaryButton"));
+    connect(m_policyButton, &QPushButton::released, this,
+            &VideoBatchPage::editKeepPolicy);
+    controls->addWidget(m_policyButton);
     root->addLayout(controls);
-    // Changing the policy re-picks which clip of each group stays checked.
-    connect(m_policy, QOverload<int>::of(&QComboBox::currentIndexChanged), this,
-            [this](int) { applyPolicyToChecks(); });
+
+    QSettings settings;
+    m_keepRules = decodeKeepRules(settings.value(QStringLiteral("batchVideo/keepRules"))
+                                      .toStringList(),
+                                  false);
+    m_keepAll = settings.value(QStringLiteral("batchVideo/keepAll"), false).toBool();
+    updatePolicyButton();
 
     QHBoxLayout* searchRow = new QHBoxLayout;
     m_searchLabel = new QLabel(this);
@@ -730,6 +929,7 @@ VideoBatchPage::VideoBatchPage(QWidget* parent)
     m_tree->installEventFilter(this);
     m_tree->viewport()->installEventFilter(this);
     root->addWidget(m_tree, 1);
+    root->addWidget(m_log);
 
     m_status->setStyleSheet(QStringLiteral("color:#64748b;"));
     root->addWidget(m_status);
@@ -767,10 +967,12 @@ void VideoBatchPage::retranslate()
     m_selectAllButton->setText(tr("Select all"));
     m_invertButton->setText(tr("Invert"));
     m_removeButton->setText(tr("Remove checked"));
-    m_deleteButton->setText(tr("Delete checked files"));
+    m_deleteButton->setText(tr("Move to Recycle Bin"));
     m_clearButton->setText(tr("Clear list"));
     m_compareButton->setText(tr("Start comparison"));
     m_policyLabel->setText(tr("Keep policy"));
+    m_policyButton->setText(tr("Edit priorities..."));
+    updatePolicyButton();
     m_searchLabel->setText(tr("Locate"));
     m_search->setPlaceholderText(tr("Ctrl+F to search name or path"));
     m_captureLabel->setText(tr("Frame position"));
@@ -798,26 +1000,6 @@ void VideoBatchPage::retranslate()
            "Dragging the Frame column wider scales the thumbnails and the row heights "
            "with it.\n"
            "Right-click a clip or a group for its menu."));
-
-    struct PolicyText {
-        KeepPolicy policy;
-        const char* text;
-    };
-    const PolicyText policies[] = {
-        {KeepPolicy::HighestResolution, QT_TR_NOOP("Highest resolution")},
-        {KeepPolicy::LowestResolution, QT_TR_NOOP("Lowest resolution")},
-        {KeepPolicy::LargestFile, QT_TR_NOOP("Largest file")},
-        {KeepPolicy::SmallestFile, QT_TR_NOOP("Smallest file")},
-        {KeepPolicy::NewestModified, QT_TR_NOOP("Newest modified")},
-        {KeepPolicy::OldestModified, QT_TR_NOOP("Oldest modified")},
-        {KeepPolicy::KeepAll, QT_TR_NOOP("Keep everything")},
-    };
-    for (const PolicyText& entry : policies) {
-        const int index = m_policy->findData(static_cast<int>(entry.policy));
-        if (index >= 0) {
-            m_policy->setItemText(index, tr(entry.text));
-        }
-    }
 
     // Group headings and the status line come from the current state, so they are
     // regenerated rather than stored.
@@ -1149,12 +1331,14 @@ void VideoBatchPage::rebuildTree(const VideoBatchOutcome& outcome)
         }
     }
 
-    for (const VideoBatchGroupInfo& group : outcome.groups) {
+    const auto addGroup = [this](const QString& label, bool duplicate,
+                                 const QVector<VideoBatchRow>& rows) {
         QTreeWidgetItem* groupItem = new QTreeWidgetItem(m_tree);
         groupItem->setFirstColumnSpanned(true);
         groupItem->setFlags(Qt::ItemIsEnabled);
-        groupItem->setData(CheckColumn, kGroupBaseRole, group.label);
-        groupItem->setText(CheckColumn, group.label);
+        groupItem->setData(CheckColumn, kGroupBaseRole, label);
+        groupItem->setData(CheckColumn, kDuplicateGroupRole, duplicate);
+        groupItem->setText(CheckColumn, label);
         groupItem->setExpanded(true);
         groupItem->setBackground(CheckColumn, QBrush(QColor(232, 237, 243)));
         groupItem->setForeground(CheckColumn, QBrush(QColor(51, 65, 85)));
@@ -1162,7 +1346,7 @@ void VideoBatchPage::rebuildTree(const VideoBatchOutcome& outcome)
         font.setBold(true);
         groupItem->setFont(CheckColumn, font);
 
-        for (const VideoBatchRow& row : group.rows) {
+        for (const VideoBatchRow& row : rows) {
             const int recordId = recordIdForPath(row.path);
             if (recordId < 0) {
                 continue;
@@ -1171,6 +1355,26 @@ void VideoBatchPage::rebuildTree(const VideoBatchOutcome& outcome)
                 groupItem->addChild(child);
             }
         }
+    };
+
+    // One group for every clip that matched nothing; a long folder would
+    // otherwise show dozens of one-clip groups. Montage-only clips keep their
+    // separate heading because they did overlap, just not on one timeline.
+    QVector<VideoBatchRow> unmatched;
+    for (const VideoBatchGroupInfo& group : outcome.groups) {
+        if (!group.duplicate && !group.montage) {
+            unmatched += group.rows;
+            continue;
+        }
+        addGroup(group.label, group.duplicate, group.rows);
+    }
+    if (!unmatched.isEmpty()) {
+        std::sort(unmatched.begin(), unmatched.end(),
+                  [](const VideoBatchRow& left, const VideoBatchRow& right) {
+                      return static_cast<long long>(left.width) * left.height
+                             > static_cast<long long>(right.width) * right.height;
+                  });
+        addGroup(tr("No duplicates - %1 clips").arg(unmatched.size()), false, unmatched);
     }
 
     // Clips that took no part in this run (unchecked, or added afterwards) are
@@ -1241,53 +1445,47 @@ void VideoBatchPage::applyPolicyToChecks()
     // the ticks are then a preview of what "移出勾选项" would leave behind.
     // Clips that have not been compared cannot be ranked, so their ticks are left
     // exactly as the user set them.
-    const KeepPolicy policy = currentPolicy();
     for (int i = 0; i < m_tree->topLevelItemCount(); ++i) {
         QTreeWidgetItem* group = m_tree->topLevelItem(i);
         if (group->data(CheckColumn, kRecordIdRole).toInt() == kPendingMarker) {
             continue;
         }
+        // Only duplicate groups have a choice to make. Unmatched and montage
+        // groups keep every row checked; otherwise one of them would be unchecked.
+        if (!group->data(CheckColumn, kDuplicateGroupRole).toBool()) {
+            continue;
+        }
         if (group->childCount() == 0) {
             continue;
         }
-        if (policy == KeepPolicy::KeepAll) {
+        if (m_keepAll) {
             for (int j = 0; j < group->childCount(); ++j) {
                 group->child(j)->setCheckState(CheckColumn, Qt::Checked);
             }
             continue;
         }
 
-        // Score each row the way the keep policy ranks clips.
-        int best = 0;
-        double bestValue = 0.0;
-        const bool keepLargest = policy == KeepPolicy::HighestResolution
-                                 || policy == KeepPolicy::LargestFile
-                                 || policy == KeepPolicy::NewestModified;
+        const auto better = [this](const RowData& left, const RowData& right) {
+            for (const KeepRule& rule : m_keepRules) {
+                const qint64 leftValue = ruleValue(left, rule.criterion);
+                const qint64 rightValue = ruleValue(right, rule.criterion);
+                if (leftValue == rightValue) {
+                    continue;
+                }
+                return rule.direction == KeepDirection::Higher ? leftValue > rightValue
+                                                               : leftValue < rightValue;
+            }
+            return false;
+        };
+
+        int best = -1;
         for (int j = 0; j < group->childCount(); ++j) {
             const RowData* row = recordForItem(group->child(j));
             if (row == nullptr) {
                 continue;
             }
-            double value = 0.0;
-            switch (policy) {
-                case KeepPolicy::HighestResolution:
-                case KeepPolicy::LowestResolution:
-                    value = static_cast<double>(row->width) * row->height;
-                    break;
-                case KeepPolicy::LargestFile:
-                case KeepPolicy::SmallestFile:
-                    value = static_cast<double>(row->fileSize);
-                    break;
-                case KeepPolicy::NewestModified:
-                case KeepPolicy::OldestModified:
-                    value = static_cast<double>(row->modified.toMSecsSinceEpoch());
-                    break;
-                case KeepPolicy::KeepAll:
-                    break;
-            }
-            if (j == 0 || (keepLargest ? value > bestValue : value < bestValue)) {
+            if (best < 0 || better(*row, *recordForItem(group->child(best)))) {
                 best = j;
-                bestValue = value;
             }
         }
         for (int j = 0; j < group->childCount(); ++j) {
@@ -1296,6 +1494,44 @@ void VideoBatchPage::applyPolicyToChecks()
         }
     }
     updateStatus();
+}
+
+qint64 VideoBatchPage::ruleValue(const RowData& row, KeepCriterion criterion) const
+{
+    switch (criterion) {
+        case KeepCriterion::Resolution:
+            return static_cast<qint64>(row.width) * row.height;
+        case KeepCriterion::FileSize:
+            return row.fileSize;
+        case KeepCriterion::Modified:
+            return row.modified.toMSecsSinceEpoch();
+        case KeepCriterion::BitDepth:
+            return 0;
+    }
+    return 0;
+}
+
+void VideoBatchPage::editKeepPolicy()
+{
+    KeepPolicyDialog dialog(m_keepRules, false, m_keepAll, this);
+    if (dialog.exec() != QDialog::Accepted) {
+        return;
+    }
+    m_keepRules = dialog.rules();
+    m_keepAll = dialog.keepAll();
+
+    QSettings settings;
+    settings.setValue(QStringLiteral("batchVideo/keepRules"), encodeKeepRules(m_keepRules));
+    settings.setValue(QStringLiteral("batchVideo/keepAll"), m_keepAll);
+
+    updatePolicyButton();
+    applyPolicyToChecks();
+    updateStatus();
+}
+
+void VideoBatchPage::updatePolicyButton()
+{
+    m_policyButton->setToolTip(keepPrioritySummary(m_keepRules, m_keepAll));
 }
 
 QVector<QTreeWidgetItem*> VideoBatchPage::allRowItems() const
@@ -1415,37 +1651,40 @@ void VideoBatchPage::setItemsChecked(const QVector<QTreeWidgetItem*>& items, boo
 void VideoBatchPage::deleteFiles(const QVector<QTreeWidgetItem*>& items)
 {
     if (items.isEmpty()) {
-        QMessageBox::information(this, tr("Delete files"),
-                                 tr("Choose or check the videos to delete first."));
+        QMessageBox::information(
+            this, tr("Move to Recycle Bin"),
+            tr("Choose or check the videos to move to the Recycle Bin first."));
         return;
     }
     if (QMessageBox::question(
-            this, tr("Delete files"),
-            tr("This permanently deletes %1 video files from disk. Continue?")
+            this, tr("Move to Recycle Bin"),
+            tr("Move %1 video files to the Recycle Bin?\n\nThe files can be "
+               "restored from there.")
                 .arg(items.size()))
         != QMessageBox::Yes) {
         return;
     }
 
-    QVector<QTreeWidgetItem*> deleted;
+    QVector<QTreeWidgetItem*> moved;
     QStringList errors;
     for (QTreeWidgetItem* item : items) {
         const RowData* row = recordForItem(item);
         if (row == nullptr) {
             continue;
         }
-        if (QFile::remove(row->path)) {
-            deleted.append(item);
+        if (QFile::moveToTrash(row->path)) {
+            moved.append(item);
         } else {
             errors.append(row->path);
         }
     }
-    removeItems(deleted);
+    removeItems(moved);
     if (!errors.isEmpty()) {
-        QMessageBox::warning(this, tr("Delete files"),
-                             tr("These %1 files could not be deleted:\n%2")
-                                 .arg(errors.size())
-                                 .arg(errors.join(QLatin1Char('\n'))));
+        QMessageBox::warning(
+            this, tr("Move to Recycle Bin"),
+            tr("These %1 files could not be moved to the Recycle Bin:\n%2")
+                .arg(errors.size())
+                .arg(errors.join(QLatin1Char('\n'))));
     }
 }
 
@@ -1495,7 +1734,7 @@ void VideoBatchPage::setBusy(bool busy)
 {
     m_busy = busy;
     m_clearButton->setEnabled(!busy);
-    m_policy->setEnabled(!busy);
+    m_policyButton->setEnabled(!busy);
     m_selectAllButton->setEnabled(!busy);
     m_invertButton->setEnabled(!busy);
     m_removeButton->setEnabled(!busy);
@@ -1504,11 +1743,6 @@ void VideoBatchPage::setBusy(bool busy)
     // The compare button's enabled state depends on the ticks, so it is decided
     // in one place rather than here.
     updateCompareButton();
-}
-
-KeepPolicy VideoBatchPage::currentPolicy() const
-{
-    return static_cast<KeepPolicy>(m_policy->currentData().toInt());
 }
 
 int VideoBatchPage::unlistedPathCount() const
@@ -1554,14 +1788,19 @@ void VideoBatchPage::startCompare()
     m_progress->setRange(0, 1);
     m_progress->setValue(0);
     m_progress->setFormat(tr("Preparing..."));
+    m_log->clear();
+    m_log->info(tr("Keep policy: %1")
+                    .arg(keepPrioritySummary(m_keepRules, m_keepAll)));
 
     // No parent: moveToThread refuses an object that already has one, and the
     // QThread::finished -> deleteLater connection owns its lifetime instead.
-    m_worker = new VideoBatchWorker(paths, currentPolicy());
+    m_worker = new VideoBatchWorker(paths, m_keepRules, m_keepAll);
     m_thread = new QThread(this);
     m_worker->moveToThread(m_thread);
     connect(m_thread, &QThread::started, m_worker, &VideoBatchWorker::run);
     connect(m_worker, &VideoBatchWorker::progress, this, &VideoBatchPage::onWorkerProgress,
+            Qt::QueuedConnection);
+    connect(m_worker, &VideoBatchWorker::logMessage, this, &VideoBatchPage::onWorkerLog,
             Qt::QueuedConnection);
     connect(m_worker, &VideoBatchWorker::finished, this, &VideoBatchPage::onCompareFinished,
             Qt::QueuedConnection);
@@ -1586,6 +1825,11 @@ void VideoBatchPage::onWorkerProgress(int done, int total, const QString& stage)
     }
     m_progress->setValue(done);
     m_progress->setFormat(QStringLiteral("%1 %p%").arg(stage));
+}
+
+void VideoBatchPage::onWorkerLog(int level, const QString& message)
+{
+    m_log->append(static_cast<ComparisonLogLevel>(level), message);
 }
 
 void VideoBatchPage::onCompareFinished(VideoBatchOutcome outcome)
@@ -1723,7 +1967,8 @@ void VideoBatchPage::showGroupContextMenu(QTreeWidgetItem* group, const QPoint& 
     menu.addSeparator();
     QAction* removeAction = menu.addAction(tr("Remove this group"));
     QAction* removeCheckedAction = menu.addAction(tr("Remove the checked clips in the group"));
-    QAction* deleteCheckedAction = menu.addAction(tr("Delete the checked files in the group"));
+    QAction* deleteCheckedAction =
+        menu.addAction(tr("Move the checked files in the group to the Recycle Bin"));
 
     for (QAction* action : {checkAllAction, uncheckAllAction, openFirstAction, folderAction,
                             removeAction, removeCheckedAction, deleteCheckedAction}) {
@@ -1793,7 +2038,7 @@ void VideoBatchPage::showTreeContextMenu(const QPoint& position)
     QAction* folderAction = menu.addAction(tr("Open containing folder"));
     menu.addSeparator();
     QAction* removeAction = menu.addAction(tr("Remove from list"));
-    QAction* deleteAction = menu.addAction(tr("Delete files"));
+    QAction* deleteAction = menu.addAction(tr("Move to Recycle Bin"));
     menu.addSeparator();
     QAction* compareAction = menu.addAction(tr("Compare the checked videos"));
 
@@ -1874,7 +2119,8 @@ void VideoBatchPage::updateStatus()
     if (m_lastFailedCount > 0) {
         text += tr(", %1 could not be read").arg(m_lastFailedCount);
     }
-    text += tr(", keep policy: %1").arg(m_policy->currentText());
+    text += tr(", keep policy: %1")
+                .arg(keepPrioritySummary(m_keepRules, m_keepAll));
     m_status->setText(text);
 }
 

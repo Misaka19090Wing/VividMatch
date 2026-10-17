@@ -12,8 +12,8 @@
 #include <QWidget>
 
 #include "batchcompareworker.h"
+#include "keeppolicy.h"
 
-class QComboBox;
 class QKeyEvent;
 class QLabel;
 class QLineEdit;
@@ -24,6 +24,7 @@ class QThread;
 class QTimer;
 class QTreeWidget;
 class QTreeWidgetItem;
+class ComparisonLogWidget;
 
 class BatchComparePage : public QWidget
 {
@@ -57,18 +58,6 @@ public:
     };
 
 private:
-    enum class SelectionPolicy {
-        HighestResolution = 0,
-        LowestResolution,
-        LargestFile,
-        SmallestFile,
-        NewestModified,
-        OldestModified,
-        HighestBitDepth,
-        LowestBitDepth,
-        KeepAll,
-    };
-
     class BatchItemDelegate;
 
     // Entries of the group (top-level row) context menu.
@@ -117,6 +106,7 @@ private slots:
     void removeChecked();
     void deleteCheckedFiles();
     void startCompare();
+    void onWorkerLog(int level, const QString& message);
     void compareFinished(QVector<BatchCluster> clusters, qint64 elapsedMs);
     void compareFailed(const QString& message);
     void onProgressChanged(int done, int total);
@@ -165,8 +155,11 @@ private:
     void setItemsChecked(const QVector<QTreeWidgetItem*>& items, bool checked);
     void deleteFiles(const QVector<QTreeWidgetItem*>& items);
     int chooseWinnerId(const QVector<int>& recordIds) const;
-    qint64 policyValue(const RowData& row) const;
-    SelectionPolicy currentPolicy() const;
+    qint64 ruleValue(const RowData& row, KeepCriterion criterion) const;
+    bool betterByRules(const RowData& left, const RowData& right) const;
+    void editKeepPolicy();
+    void updatePolicyButton();
+    void applyPolicyToChecks();
     const RowData* recordForItem(const QTreeWidgetItem* item) const;
     RowData* recordForItem(QTreeWidgetItem* item);
     bool matchesSearch(const RowData& row, const QString& text) const;
@@ -185,13 +178,14 @@ private:
 private:
     QTreeWidget* m_tree;
     QProgressBar* m_progress;
-    QComboBox* m_policy;
+    QPushButton* m_policyButton;
     QLineEdit* m_search;
     QPushButton* m_invertButton;
     QPushButton* m_removeButton;
     QPushButton* m_deleteButton;
     QPushButton* m_compareButton;
     QLabel* m_status;
+    ComparisonLogWidget* m_log;
 
     // Kept so a language switch can rewrite them.
     QPushButton* m_backButton;
@@ -204,6 +198,8 @@ private:
     QHash<int, RowData> m_records;
     QVector<int> m_compareRecordIds;
     QVector<SortRule> m_sortRules;
+    QVector<KeepRule> m_keepRules;
+    bool m_keepAll = false;
     QStringList m_baseHeaders;
     QPointer<QThread> m_thread;
     BatchCompareWorker* m_worker;

@@ -1,5 +1,6 @@
 #include "imagecomparepage.h"
 
+#include "comparisonlog.h"
 #include "formatutils.h"
 
 #include <opencv2/imgcodecs.hpp>
@@ -47,6 +48,40 @@ bool decodeImage(const QString& path, cv::Mat& output)
     return !output.empty();
 }
 
+// The 16 block hashes as fixed-width hex, so the panel shows the actual
+// fingerprint rather than only the score derived from it.
+QString fingerprintHex(const vividmatch::Fingerprint& fingerprint)
+{
+    QStringList blocks;
+    blocks.reserve(vividmatch::kBlockCount);
+    for (int i = 0; i < vividmatch::kBlockCount; ++i) {
+        blocks << QString::number(static_cast<qulonglong>(fingerprint.blocks[i]), 16)
+                      .rightJustified(16, QLatin1Char('0'));
+    }
+    return blocks.join(QLatin1Char(' '));
+}
+
+QString blockDistanceText(const vividmatch::BlockComparison& comparison)
+{
+    QStringList values;
+    values.reserve(vividmatch::kBlockCount);
+    for (int i = 0; i < vividmatch::kBlockCount; ++i) {
+        values << QStringLiteral("%1:%2").arg(i).arg(comparison.distances[i]);
+    }
+    return values.join(QLatin1Char(' '));
+}
+
+QString discardedBlockText(const vividmatch::BlockComparison& comparison)
+{
+    QStringList values;
+    for (int i = 0; i < vividmatch::kBlockCount; ++i) {
+        if (comparison.discarded[i]) {
+            values << QStringLiteral("%1(%2)").arg(i).arg(comparison.distances[i]);
+        }
+    }
+    return values.join(QStringLiteral(", "));
+}
+
 QString elidedPath(const QLabel* label, const QString& path)
 {
     return label->fontMetrics().elidedText(path, Qt::ElideMiddle, 360);
@@ -90,6 +125,7 @@ ImageComparePage::ImageComparePage(QWidget* parent)
     , m_resultSource(nullptr)
     , m_threshold(nullptr)
     , m_compareButton(nullptr)
+    , m_log(new ComparisonLogWidget(this))
 {
     QVBoxLayout* root = new QVBoxLayout(this);
     root->setContentsMargins(28, 18, 28, 18);
@@ -216,7 +252,7 @@ ImageComparePage::ImageComparePage(QWidget* parent)
     m_resultScore->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
     resultLayout->addWidget(m_resultScore);
     root->addWidget(resultPanel);
-    root->addStretch(1);
+    root->addWidget(m_log, 1);
 
     retranslate();
 }
@@ -294,6 +330,11 @@ void ImageComparePage::setImagePath(int slot, const QString& path)
     }
     refreshPreview(slot);
     m_compareButton->setEnabled(!m_firstPath.isEmpty() && !m_secondPath.isEmpty());
+    m_log->detail(tr("Image %1 selected: %2 (%3x%4)")
+                      .arg(slot + 1)
+                      .arg(path)
+                      .arg(image.width())
+                      .arg(image.height()));
     // A new image invalidates the previous result.
     m_hasResult = false;
     m_resultVerdict->setText(tr("Waiting to compare"));
@@ -330,25 +371,83 @@ void ImageComparePage::compareSelectedImages()
         return;
     }
 
+    m_log->clear();
+    const double threshold = m_threshold->value();
+    m_log->info(tr("Starting image comparison (threshold %1)")
+                    .arg(threshold, 0, 'f', 2));
+    m_log->detail(tr("Image one: %1").arg(m_firstPath));
+    m_log->detail(tr("Image two: %1").arg(m_secondPath));
+
     // Times the whole operation, decoding included: what the user waits for is
     // "click to result", not just the hashing.
     QElapsedTimer timer;
     timer.start();
+    QElapsedTimer step;
+    step.start();
 
     cv::Mat first;
     cv::Mat second;
-    if (!decodeImage(m_firstPath, first) || !decodeImage(m_secondPath, second)) {
-        showError(tr("Decoding failed; check that both images can still be opened."));
+    const bool firstDecoded = decodeImage(m_firstPath, first);
+    const qint64 firstDecodeMs = step.restart();
+    const bool secondDecoded = decodeImage(m_secondPath, second);
+    const qint64 secondDecodeMs = step.elapsed();
+    if (!firstDecoded) {
+        showError(tr("Could not decode image one: %1").arg(m_firstPath));
         return;
     }
+    if (!secondDecoded) {
+        showError(tr("Could not decode image two: %1").arg(m_secondPath));
+        return;
+    }
+    m_log->detail(tr("Decoded image one in %1")
+                      .arg(formatutils::durationValue(firstDecodeMs)));
+    m_log->detail(tr("Decoded image two in %1")
+                      .arg(formatutils::durationValue(secondDecodeMs)));
 
     try {
+        step.restart();
         const vividmatch::Fingerprint left = vividmatch::makeFingerprint(first);
+        const qint64 leftHashMs = step.restart();
         const vividmatch::Fingerprint right = vividmatch::makeFingerprint(second);
-        const double threshold = m_threshold->value();
-        const double score = vividmatch::compareFingerprints(left, right);
-        setResult(score, threshold, left.width, left.height, right.width, right.height,
-                  timer.elapsed());
+        const qint64 rightHashMs = step.elapsed();
+
+        m_log->detail(tr("Hashed image one in %1")
+                          .arg(formatutils::durationValue(leftHashMs)));
+        m_log->detail(tr("Hashed image two in %1")
+                          .arg(formatutils::durationValue(rightHashMs)));
+        m_log->detail(tr("Canvas: 64x64 grayscale, 16 blocks x 64 bits"));
+        m_log->detail(tr("Image one block hashes: %1").arg(fingerprintHex(left)));
+        m_log->detail(tr("Image two block hashes: %1").arg(fingerprintHex(right)));
+
+        step.restart();
+        const vividmatch::BlockComparison blocks =
+            vividmatch::compareFingerprintBlocks(left, right);
+        const qint64 compareMs = step.elapsed();
+        m_log->detail(tr("Block Hamming distances: %1").arg(blockDistanceText(blocks)));
+        m_log->detail(tr("Discarded blocks (worst %1): %2")
+                          .arg(vividmatch::kDiscardBlocks)
+                          .arg(discardedBlockText(blocks)));
+        m_log->detail(
+            tr("Kept %1 blocks: mean Hamming distance %2 / 64 -> similarity %3%")
+                .arg(blocks.keptBlocks)
+                .arg((1.0 - blocks.score) * vividmatch::kHashBits, 0, 'f', 2)
+                .arg(blocks.score * 100.0, 0, 'f', 2));
+        m_log->detail(tr("Comparison step took %1")
+                          .arg(formatutils::durationValue(compareMs)));
+
+        const bool matched = blocks.score >= threshold;
+        m_log->append(matched ? ComparisonLogLevel::Success
+                              : ComparisonLogLevel::Warning,
+                      tr("Similarity %1% vs threshold %2 -> %3")
+                          .arg(blocks.score * 100.0, 0, 'f', 2)
+                          .arg(threshold, 0, 'f', 2)
+                          .arg(matched ? tr("Verdict: the same picture")
+                                       : tr("Verdict: different pictures")));
+        m_log->info(tr("Finished in %1")
+                        .arg(formatutils::durationValue(timer.elapsed())));
+
+        setResult(blocks.score, threshold, left.width, left.height, right.width,
+                  right.height, timer.elapsed());
     } catch (const std::exception& error) {
         showError(QString::fromUtf8(error.what()));
     }
@@ -401,6 +500,7 @@ void ImageComparePage::refreshResultText()
 
 void ImageComparePage::showError(const QString& message)
 {
+    m_log->error(message);
     QMessageBox::warning(this, tr("Comparison failed"), message);
 }
 

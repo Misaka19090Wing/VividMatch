@@ -42,7 +42,9 @@ MainWin::MainWin(QWidget* parent)
     , m_exitAction(nullptr)
     , m_restartNoticeShowing(false)
 {
-    resize(980, 680);
+    // Tall enough for the comparison log panel without squeezing the content
+    // above it; the log can still be collapsed when vertical space is tight.
+    resize(1100, 720);
     setMinimumSize(860, 600);
 
     // Built here rather than in the initialiser list: createHomePage() records the

@@ -6,8 +6,10 @@
 
 namespace {
 
-using vividmatch::Fingerprint;
+using vividmatch::BlockComparison;
+using vividmatch::compareFingerprintBlocks;
 using vividmatch::compareFingerprints;
+using vividmatch::Fingerprint;
 using vividmatch::makeFingerprint;
 
 cv::Mat syntheticImage(int seed, int width = 512, int height = 512) {
@@ -132,6 +134,33 @@ int main() {
             }
         }
         failures += expect(all_different, "different images score below 0.70");
+    }
+
+    {
+        // The detailed form must report the same score and mark exactly the
+        // blocks the score discarded: the worst `kDiscardBlocks` distances.
+        const Fingerprint first = makeFingerprint(syntheticImage(21));
+        const Fingerprint second = makeFingerprint(syntheticImage(22));
+        const BlockComparison detail = compareFingerprintBlocks(first, second);
+        failures += expect(detail.keptBlocks == vividmatch::kBlockCount - vividmatch::kDiscardBlocks,
+                           "block comparison keeps 12 of 16 blocks");
+        int discarded = 0;
+        int largestKept = -1;
+        int smallestDiscarded = vividmatch::kHashBits + 1;
+        for (int i = 0; i < vividmatch::kBlockCount; ++i) {
+            if (detail.discarded[i]) {
+                ++discarded;
+                smallestDiscarded = std::min(smallestDiscarded, detail.distances[i]);
+            } else {
+                largestKept = std::max(largestKept, detail.distances[i]);
+            }
+        }
+        failures += expect(discarded == vividmatch::kDiscardBlocks,
+                           "block comparison discards exactly 4 blocks");
+        failures += expect(largestKept <= smallestDiscarded,
+                           "discarded blocks are the worst distances");
+        failures += expect(nearlyEqual(detail.score, compareFingerprints(first, second)),
+                           "detailed and plain comparison agree on the score");
     }
 
     if (failures == 0) {
